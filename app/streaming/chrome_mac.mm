@@ -32,6 +32,9 @@
 static void (*s_Action)(int);
 static ChromeState s_State;
 static bool s_Shown;
+static NSRect s_WindowedFrame; // where the window was before it went fullscreen
+static NSButton* s_Lights[3];
+static NSView* s_Content; // the window's content view; ours hang in it
 
 static NSColor* rgba(uint32_t value)
 {
@@ -575,6 +578,8 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     s_Action = action;
     s_Shown = false;
     s_TipFor = nil;
+    s_Content = content;
+    s_WindowedFrame = NSZeroRect;
 
     CGFloat top = content.bounds.size.height, middle = round(content.bounds.size.width / 2);
     NSAutoresizingMaskOptions pinned = NSViewMinXMargin | NSViewMaxXMargin | NSViewMinYMargin;
@@ -597,6 +602,7 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         NSButton* light = [NSWindow standardWindowButton:kinds[i] forStyleMask:style];
         [light setFrameOrigin:NSMakePoint(12 + i * 20, round((BAR_HEIGHT - light.frame.size.height) / 2) + 1)];
         [bar addSubview:light];
+        s_Lights[i] = light;
     }
 
     [bar addSubview:[[[ChromeHandle alloc] initWithFrame:NSMakeRect(82, 4, 44, 18)] autorelease]];
@@ -612,9 +618,38 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     tip.hidden = YES;
     s_Tip = tip;
 
-    [content addSubview:s_Tab positioned:NSWindowAbove relativeTo:nil];
-    [content addSubview:s_Bar positioned:NSWindowAbove relativeTo:nil];
-    [content addSubview:s_Tip positioned:NSWindowAbove relativeTo:nil];
+    chromeRaise();
+
+    // In fullscreen the Mac's own menu bar would slide down over the tab when
+    // the pointer reaches the top edge. SDL can keep it away.
+    SDL_SetHint("SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY", "0");
+}
+
+void chromeRaise()
+{
+    if (s_Bar == nil) {
+        return;
+    }
+    [s_Content addSubview:s_Tab positioned:NSWindowAbove relativeTo:nil];
+    [s_Content addSubview:s_Bar positioned:NSWindowAbove relativeTo:nil];
+    [s_Content addSubview:s_Tip positioned:NSWindowAbove relativeTo:nil];
+}
+
+// Fullscreen and back leaves the window with a title bar's worth less content
+// than it had, and with the lights we put on the bar hidden. Put both right.
+void chromeLeftFullscreen()
+{
+    if (s_Bar == nil) {
+        return;
+    }
+    if (!NSIsEmptyRect(s_WindowedFrame)) {
+        [s_Bar.window setFrame:s_WindowedFrame display:YES];
+    }
+    for (NSButton* light : s_Lights) {
+        light.hidden = NO;
+        light.needsDisplay = YES;
+    }
+    chromeRaise();
 }
 
 void chromeUpdate(const ChromeState* state)
@@ -625,18 +660,13 @@ void chromeUpdate(const ChromeState* state)
     s_State = *state;
 
     // A new renderer puts its view on top of ours; go back above it.
-    NSView* content = s_Bar.superview;
-    if (content.subviews.lastObject != s_Tip) {
-        [content addSubview:s_Tab positioned:NSWindowAbove relativeTo:nil];
-        [content addSubview:s_Bar positioned:NSWindowAbove relativeTo:nil];
-        [content addSubview:s_Tip positioned:NSWindowAbove relativeTo:nil];
+    if (s_Content.subviews.lastObject != s_Tip) {
+        chromeRaise();
     }
-
-    // In fullscreen the system has put a title bar back, and the top edge is its.
-    if (state->fullscreen) {
-        showBar(false);
+    if (!state->fullscreen && !(s_Bar.window.styleMask & NSWindowStyleMaskFullScreen)) {
+        s_WindowedFrame = s_Bar.window.frame;
     }
-    s_Tab.hidden = s_Shown || state->fullscreen;
+    s_Tab.hidden = s_Shown;
     s_Tab.needsDisplay = YES;
 
     static NSString* const symbols[] = {@"bolt.fill", @"cable.connector", @"wifi", @"globe", @"network"};

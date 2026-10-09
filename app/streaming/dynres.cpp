@@ -90,6 +90,7 @@ static int s_ChromeAsked;      // one bit per CHROME_ action
 static bool s_Follow = true;   // restart the stream when the window's size changes
 static bool s_ResizeOnce;      // a restart the user asked for, whatever s_Follow says
 static char s_Host[64];
+static ChromeState s_ChromeState; // what the bar was last told
 
 enum {
     COVER_OFF,
@@ -304,10 +305,11 @@ bool Session::dynresTick()
             if (wasFullscreen && !fullscreen) {
                 // SDL rebuilt the window's style on the way out of fullscreen.
                 dynresChromeless(m_Window, 2);
+                chromeLeftFullscreen();
             }
             wasFullscreen = fullscreen;
 
-            ChromeState state = {};
+            ChromeState& state = s_ChromeState;
             state.stats = m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug);
             state.truePixels = s_PanelPixels;
             state.followSize = s_Follow;
@@ -478,6 +480,11 @@ bool Session::dynresTick()
     s_ResizeOnce = false;
 
     // Everything from here to the first new frame happens behind the cover.
+    if (s_Chrome) {
+        // The bar hears of it now: this thread is about to be busy for a while.
+        s_ChromeState.busy = true;
+        chromeUpdate(&s_ChromeState);
+    }
     dynresBusy(m_Window, true);
     s_Cover = COVER_UNTIL_DECODER;
     s_CoverAt = now;

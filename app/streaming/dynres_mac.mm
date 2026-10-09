@@ -6,6 +6,8 @@
 // itself, dimmed, with a spinner on top. All of it is Core Animation layers,
 // which the window server keeps animating while our thread blocks on the network.
 
+#include "chrome.h"
+
 #include "SDL_compat.h"
 #include <SDL_syswm.h>
 
@@ -77,6 +79,7 @@ void dynresBusy(SDL_Window* window, bool busy)
         if (s_Cover != nil) {
             // A new renderer puts its own view on top of ours; go back above it.
             [content addSubview:s_Cover positioned:NSWindowAbove relativeTo:nil];
+            chromeRaise(); // the bar stays above the cover
             return;
         }
 
@@ -130,6 +133,7 @@ void dynresBusy(SDL_Window* window, bool busy)
         [cover addSubview:spinner];
 
         [content addSubview:cover positioned:NSWindowAbove relativeTo:nil];
+        chromeRaise(); // the bar stays above the cover
         // Get it on screen now: the caller is about to block for a while.
         [CATransaction flush];
 

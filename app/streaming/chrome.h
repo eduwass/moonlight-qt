@@ -41,10 +41,14 @@ struct ChromeState {
 void chromeStart(SDL_Window* window, void (*action)(int));
 void chromeUpdate(const ChromeState* state);
 bool chromeShown();
+void chromeRaise();          // something was put on top of the window's content; go back above it
+void chromeLeftFullscreen(); // the window is back from fullscreen and has its style again
 #else
 static inline void chromeStart(SDL_Window*, void (*)(int)) {}
 static inline void chromeUpdate(const ChromeState*) {}
 static inline bool chromeShown() { return false; }
+static inline void chromeRaise() {}
+static inline void chromeLeftFullscreen() {}
 #endif
 
 // netpath.cpp: the kind of link the stream is on, CHROME_THUNDERBOLT ..., and
