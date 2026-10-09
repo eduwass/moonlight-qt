@@ -281,7 +281,10 @@ bool Session::dynresTick()
         dynresChromeless(m_Window, qEnvironmentVariableIntValue("MOONLIGHT_CHROMELESS"));
         s_Chrome = qEnvironmentVariableIsSet("MOONLIGHT_CHROME");
         s_ChromeAsked = 0;
-        s_Follow = true;
+        // MOONLIGHT_FOLLOW=0 starts with Follow size off: the stream keeps the
+        // size it was asked for, whatever the window's (for measuring a size
+        // the screen at hand cannot show; the bar's switch turns it back on).
+        s_Follow = qEnvironmentVariable("MOONLIGHT_FOLLOW") != "0";
         if (s_Chrome) {
             SDL_strlcpy(s_Host, m_Computer->name.toUtf8().constData(), sizeof(s_Host));
             dynresChromeless(m_Window, 2);
