@@ -142,7 +142,8 @@ static void symbol(NSString* name, NSRect box, uint32_t colour, CGFloat size)
     else if (c > 32 && c < 127) {
         key = c;
     }
-    if (key == 0) {
+    // The number pad's keys have the main row's characters but other key codes in SDL.
+    if (key == 0 || (event.modifierFlags & NSEventModifierFlagNumericPad)) {
         [self refuse:@"Use a letter, digit or F-key"];
         return;
     }

@@ -20,6 +20,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include <initializer_list>
+#include <set>
 #include <vector>
 
 #define BAR_WIDTH 330
@@ -75,6 +76,36 @@ struct TipLine {
     CGFloat gap;    // space above
 };
 
+// Which system is at the other end: MOONLIGHT_CHROME=linux says Linux, anything
+// else a Mac. The stream protocol does not say, so the launcher does.
+static bool s_Linux;
+
+// The remote system's mark, centred on a point: Apple's logo, or for Linux the
+// outline Arch uses (the PC runs Omarchy), which reads at this size where a
+// penguin would not.
+static void drawSystem(NSPoint centre, CGFloat size, uint32_t colour)
+{
+    if (!s_Linux) {
+        NSImage* image = [[NSImage imageWithSystemSymbolName:@"apple.logo" accessibilityDescription:nil]
+            imageWithSymbolConfiguration:[[NSImageSymbolConfiguration configurationWithPointSize:size weight:NSFontWeightMedium]
+                                             configurationByApplyingConfiguration:[NSImageSymbolConfiguration configurationWithPaletteColors:@[rgba(colour)]]]];
+        NSSize is = image.size;
+        [image drawInRect:NSMakeRect(round(centre.x - is.width / 2), round(centre.y - is.height / 2), is.width, is.height)];
+        return;
+    }
+    CGFloat x = centre.x - size / 2, y = centre.y - size / 2;
+    NSBezierPath* arch = [NSBezierPath bezierPath];
+    [arch moveToPoint:NSMakePoint(x + size * 0.5, y + size)];
+    [arch curveToPoint:NSMakePoint(x, y) controlPoint1:NSMakePoint(x + size * 0.38, y + size * 0.6) controlPoint2:NSMakePoint(x + size * 0.18, y + size * 0.3)];
+    [arch curveToPoint:NSMakePoint(x + size * 0.36, y + size * 0.14) controlPoint1:NSMakePoint(x + size * 0.14, y + size * 0.1) controlPoint2:NSMakePoint(x + size * 0.26, y + size * 0.14)];
+    [arch curveToPoint:NSMakePoint(x + size * 0.64, y + size * 0.14) controlPoint1:NSMakePoint(x + size * 0.36, y + size * 0.52) controlPoint2:NSMakePoint(x + size * 0.64, y + size * 0.52)];
+    [arch curveToPoint:NSMakePoint(x + size, y) controlPoint1:NSMakePoint(x + size * 0.74, y + size * 0.14) controlPoint2:NSMakePoint(x + size * 0.86, y + size * 0.1)];
+    [arch curveToPoint:NSMakePoint(x + size * 0.5, y + size) controlPoint1:NSMakePoint(x + size * 0.82, y + size * 0.3) controlPoint2:NSMakePoint(x + size * 0.62, y + size * 0.6)];
+    [arch closePath];
+    [rgba(colour) setFill];
+    [arch fill];
+}
+
 static void drawMark(int verdict, NSRect box)
 {
     if (verdict == CHROME_FAIR) {
@@ -97,6 +128,15 @@ static void drawMark(int verdict, NSRect box)
 @end
 
 @implementation ChromeTip
+- (void)dealloc
+{
+    for (const TipLine& line : lines) {
+        [line.left release];
+        [line.right release];
+        [line.hint release];
+    }
+    [super dealloc];
+}
 - (BOOL)isFlipped { return YES; }
 - (NSView*)hitTest:(NSPoint)point { return nil; }
 - (CGFloat)layout:(BOOL)draw
@@ -266,7 +306,7 @@ static void showTip(ChromeButton* button);
     [rgba(0xC4C4CAFF) setFill];
     for (int column = 0; column < 4; column++) {
         for (int row = 0; row < 2; row++) {
-            [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(11 + 2 + column * 6 - 1.2, 5 + 1.5 + row * 5 - 1.2, 2.4, 2.4)] fill];
+            [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(round((self.bounds.size.width - 22) / 2) + 2 + column * 6 - 1.2, 5 + 1.5 + row * 5 - 1.2, 2.4, 2.4)] fill];
         }
     }
 }
@@ -356,6 +396,7 @@ static void showTip(ChromeButton* button);
     [shape fill];
     [rgba(0xFFFFFF29) setStroke];
     [shape stroke];
+    drawSystem(NSMakePoint(86, 13), 11, 0xC4C4CAFF);
 
     [rgba(0xFFFFFF24) setFill];
     NSRectFillUsingOperation(NSMakeRect(73, 6, 1, 14), NSCompositingOperationSourceOver);
@@ -426,6 +467,7 @@ static void showTip(ChromeButton* button);
     arrow.lineJoinStyle = NSLineJoinStyleRound;
     [rgba(0xFFFFFFE6) setStroke];
     [arrow stroke];
+    drawSystem(NSMakePoint(left + 12, y), 7, 0xFFFFFFB3);
 
     if (s_State.verdict == CHROME_FAIR) {
         drawMark(CHROME_FAIR, NSMakeRect(left + TAB_WIDTH + 4, top - 7, 4, 4));
@@ -488,7 +530,7 @@ static void fillTip(ChromeButton* button, std::vector<TipLine>& lines)
         if (s.link == CHROME_TAILSCALE) {
             kind = s.relayed ? @"Tailscale · relayed" : @"Tailscale · direct";
         }
-        lines.push_back({@(s.host), nil, nil, NSFontWeightSemibold, 0xF2F2F4FF, 0, false, 0});
+        lines.push_back({[NSString stringWithFormat:@"%s · %@", s.host, s_Linux ? @"Linux" : @"macOS"], nil, nil, NSFontWeightSemibold, 0xF2F2F4FF, 0, false, 0});
         lines.push_back({kind, nil, nil, NSFontWeightRegular, 0xD6D6DCFF, 0, false, 1});
         lines.push_back({[NSString stringWithFormat:@"%d × %d · %d fps", s.width, s.height, s.fps], nil, nil, NSFontWeightRegular, 0xA0A0A8FF, 0, false, 6});
 
@@ -607,18 +649,31 @@ static void setFocus(int focus)
     }
 }
 
+// Keys that are down, by who saw them go down: a release goes where its press
+// went, whatever has happened to the bar in between.
+static std::set<int> s_KeysOurs, s_KeysRemote;
+
+static bool chromeTakes(int key, bool down, int sdlMods);
+
 bool chromeKey(int key, bool down, int sdlMods)
 {
     if (s_Bar == nil) {
         return false;
     }
-
-    // A key whose press was ours: its release is ours too.
-    static int taken;
-    if (!down && key == taken) {
-        taken = 0;
-        return true;
+    if (!down) {
+        s_KeysRemote.erase(key);
+        return s_KeysOurs.erase(key) != 0;
     }
+    if (s_KeysRemote.count(key) && s_Focus >= 0) {
+        return true; // held since before the bar took the keyboard, and repeating
+    }
+    bool ours = chromeTakes(key, down, sdlMods);
+    (ours ? s_KeysOurs : s_KeysRemote).insert(key);
+    return ours;
+}
+
+static bool chromeTakes(int key, bool down, int sdlMods)
+{
 
     int mods = (sdlMods & KMOD_CTRL ? MOD_CTRL : 0) | (sdlMods & KMOD_ALT ? MOD_ALT : 0) |
                (sdlMods & KMOD_SHIFT ? MOD_SHIFT : 0) | (sdlMods & KMOD_GUI ? MOD_CMD : 0);
@@ -627,7 +682,6 @@ bool chromeKey(int key, bool down, int sdlMods)
         if (binding.key != key || binding.mods != mods) {
             continue;
         }
-        taken = key;
         if (which == KEY_BAR) {
             setFocus(s_Focus >= 0 ? -1 : 1); // again closes it
         }
@@ -703,11 +757,24 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     [s_Bar release];
     [s_Tip release];
     s_Action = action;
+    s_Linux = getenv("MOONLIGHT_CHROME") != nullptr && strstr(getenv("MOONLIGHT_CHROME"), "linux") != nullptr;
     s_Shown = false;
     s_TipFor = nil;
     s_Focus = -1;
     s_Content = content;
     s_WindowedFrame = NSZeroRect;
+    s_KeysOurs.clear();
+    s_KeysRemote.clear();
+    // Where the window is, for the way back, as it leaves for fullscreen by any route.
+    static id watcher;
+    if (watcher != nil) {
+        [NSNotificationCenter.defaultCenter removeObserver:watcher];
+        [watcher release];
+    }
+    watcher = [[NSNotificationCenter.defaultCenter addObserverForName:NSWindowWillEnterFullScreenNotification object:w queue:nil
+                                                           usingBlock:^(NSNotification* note) {
+        s_WindowedFrame = ((NSWindow*)note.object).frame;
+    }] retain];
 
     CGFloat top = content.bounds.size.height, middle = round(content.bounds.size.width / 2);
     NSAutoresizingMaskOptions pinned = NSViewMinXMargin | NSViewMaxXMargin | NSViewMinYMargin;
@@ -733,7 +800,7 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         s_Lights[i] = light;
     }
 
-    [bar addSubview:[[[ChromeHandle alloc] initWithFrame:NSMakeRect(82, 4, 44, 18)] autorelease]];
+    [bar addSubview:[[[ChromeHandle alloc] initWithFrame:NSMakeRect(98, 4, 28, 18)] autorelease]];
     bar->link = addButton(bar, 134, @"bolt.fill", -1);
     bar->stats = addButton(bar, 175, @"chart.bar.fill", CHROME_STATS);
     bar->truePixels = addButton(bar, 203, @"square.grid.2x2.fill", CHROME_TRUE_PIXELS);
