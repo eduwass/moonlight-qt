@@ -148,6 +148,8 @@ private:
 
     bool startConnectionAsync();
 
+    bool dynresTick(); // dynres.cpp
+
     bool validateLaunch(SDL_Window* testWindow);
 
     void emitLaunchWarning(QString text);

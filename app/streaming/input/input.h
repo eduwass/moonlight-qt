@@ -90,6 +90,8 @@ public:
 
     void setWindow(SDL_Window* window);
 
+    void setStreamSize(int width, int height) { m_StreamWidth = width; m_StreamHeight = height; } // dynres.cpp
+
     void handleKeyEvent(SDL_KeyboardEvent* event);
 
     void handleMouseButtonEvent(SDL_MouseButtonEvent* event);

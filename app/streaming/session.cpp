@@ -1964,6 +1964,7 @@ void Session::exec()
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
     for (;;) {
+        if (!dynresTick()) goto DispatchDeferredCleanup; // dynres.cpp
 #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
         // SDL 2.0.18 has a proper wait event implementation that uses platform
         // support to block on events rather than polling on Windows, macOS, X11,
