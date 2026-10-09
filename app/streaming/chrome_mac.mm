@@ -24,7 +24,7 @@
 #define BAR_WIDTH 289
 #define BAR_HEIGHT 26
 #define TAB_WIDTH 56
-#define TAB_HEIGHT 6
+#define TAB_HEIGHT 10
 #define TIP_WIDTH 264
 #define SHOW_AFTER 0.3 // the pointer rests on the tab this long before the bar shows
 #define HIDE_AFTER 0.5 // the bar stays this long after the pointer has left it
@@ -137,7 +137,7 @@ static void drawMark(int verdict, NSRect box)
 - (void)drawRect:(NSRect)dirty
 {
     NSBezierPath* shape = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 0.5, 0.5) xRadius:8 yRadius:8];
-    [rgba(0x1A1A1EF2) setFill];
+    [rgba(0x1A1A1EFF) setFill];
     [shape fill];
     [rgba(0xFFFFFF29) setStroke];
     [shape stroke];
@@ -321,12 +321,25 @@ static void showTip(ChromeButton* button);
 - (void)scrollWheel:(NSEvent*)event {}
 - (void)drawRect:(NSRect)dirty
 {
+    // Drawn by the skin.
+}
+@end
+
+// The bar's colour, outline and dividers. Opaque: the remote menu bar is right
+// underneath, and its icons showing through made the bar hard to read.
+@interface ChromeSkin : NSView
+@end
+
+@implementation ChromeSkin
+- (NSView*)hitTest:(NSPoint)point { return nil; }
+- (void)drawRect:(NSRect)dirty
+{
     // Square at the top, where it meets the window's edge; round below.
     NSRect box = NSInsetRect(self.bounds, 0.5, 0);
     box.origin.y += 0.5;
     box.size.height += 10;
     NSBezierPath* shape = [NSBezierPath bezierPathWithRoundedRect:box xRadius:10 yRadius:10];
-    [rgba(0x1A1A1EE6) setFill];
+    [rgba(0x1A1A1EFF) setFill];
     [shape fill];
     [rgba(0xFFFFFF29) setStroke];
     [shape stroke];
@@ -369,15 +382,32 @@ static void showTip(ChromeButton* button);
 - (void)drawRect:(NSRect)dirty
 {
     // The view is wider than the tab, to have room for the mark.
-    CGFloat left = round((self.bounds.size.width - TAB_WIDTH) / 2);
-    NSRect tab = NSMakeRect(left, self.bounds.size.height - TAB_HEIGHT, TAB_WIDTH, TAB_HEIGHT + 4);
-    [rgba(0xFFFFFFD9) setFill];
-    [[NSBezierPath bezierPathWithRoundedRect:tab xRadius:4 yRadius:4] fill];
+    // Dark with a light outline, so that it shows on any picture; the small
+    // arrow says there is something to pull down.
+    CGFloat left = round((self.bounds.size.width - TAB_WIDTH) / 2), top = self.bounds.size.height;
+    NSRect tab = NSMakeRect(left + 0.5, top - TAB_HEIGHT + 0.5, TAB_WIDTH - 1, TAB_HEIGHT + 5);
+    NSBezierPath* shape = [NSBezierPath bezierPathWithRoundedRect:tab xRadius:5 yRadius:5];
+    [rgba(0x1A1A1EFF) setFill];
+    [shape fill];
+    [rgba(0xFFFFFF73) setStroke];
+    [shape stroke];
+
+    NSBezierPath* arrow = [NSBezierPath bezierPath];
+    CGFloat middle = left + TAB_WIDTH / 2.0, y = top - TAB_HEIGHT / 2.0 + 0.5;
+    [arrow moveToPoint:NSMakePoint(middle - 4, y + 1.5)];
+    [arrow lineToPoint:NSMakePoint(middle, y - 1.5)];
+    [arrow lineToPoint:NSMakePoint(middle + 4, y + 1.5)];
+    arrow.lineWidth = 1.5;
+    arrow.lineCapStyle = NSLineCapStyleRound;
+    arrow.lineJoinStyle = NSLineJoinStyleRound;
+    [rgba(0xFFFFFFE6) setStroke];
+    [arrow stroke];
+
     if (s_State.verdict == CHROME_FAIR) {
-        drawMark(CHROME_FAIR, NSMakeRect(left + TAB_WIDTH + 4, self.bounds.size.height - 5, 4, 4));
+        drawMark(CHROME_FAIR, NSMakeRect(left + TAB_WIDTH + 4, top - 7, 4, 4));
     }
     else if (s_State.verdict == CHROME_POOR) {
-        drawMark(CHROME_POOR, NSMakeRect(left + TAB_WIDTH + 4, self.bounds.size.height - 7, 2, 6));
+        drawMark(CHROME_POOR, NSMakeRect(left + TAB_WIDTH + 4, top - 8, 2, 6));
     }
 }
 @end
@@ -550,12 +580,15 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     NSAutoresizingMaskOptions pinned = NSViewMinXMargin | NSViewMaxXMargin | NSViewMinYMargin;
 
     // Wider and taller than the tab it draws: easier to rest on, and room for the mark.
-    s_Tab = [[ChromeTab alloc] initWithFrame:NSMakeRect(middle - 40, top - 10, 80, 10)];
+    s_Tab = [[ChromeTab alloc] initWithFrame:NSMakeRect(middle - 40, top - 14, 80, 14)];
     s_Tab.autoresizingMask = pinned;
 
     ChromeBar* bar = [[ChromeBar alloc] initWithFrame:NSMakeRect(middle - round(BAR_WIDTH / 2.0), top - BAR_HEIGHT, BAR_WIDTH, BAR_HEIGHT)];
     bar.autoresizingMask = pinned;
     bar.hidden = YES;
+
+    ChromeSkin* skin = [[[ChromeSkin alloc] initWithFrame:bar.bounds] autorelease];
+    [bar addSubview:skin];
 
     // Real traffic lights, acting on this window like the ones it no longer shows.
     NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
