@@ -116,6 +116,10 @@ static void loadDevices()
 }
 @end
 
+@interface ManagerController ()
+- (void)show;
+@end
+
 static ManagerController* s_Manager;
 
 static NSTextField* label(NSString* text, CGFloat size, NSFontWeight weight, NSColor* colour)
@@ -209,6 +213,9 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 - (void)show
 {
+    if (window == nil) {
+        return;
+    }
     NSDictionary* device = [self device];
     detail.hidden = device == nil;
     if (device == nil) {
@@ -493,16 +500,19 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         NSString* rule = [device[@"fpsRule"] length] > 0 ? device[@"fpsRule"] : linux ? @"11059200:50:60" : @"8294400:40:60";
         NSArray<NSString*>* parts = [rule componentsSeparatedByString:@":"];
         NSInteger fps = parts.count == 3 ? (pw * ph > [parts[0] integerValue] ? [parts[1] integerValue] : [parts[2] integerValue]) : 60;
-        if ([device[@"fps"] integerValue] > 0) {
-            fps = [device[@"fps"] integerValue]; // asked for by a link
+        NSInteger askedFps = [device[@"fps"] integerValue] ?: [NSUserDefaults.standardUserDefaults integerForKey:@"FrameRate"];
+        if (askedFps > 0) {
+            fps = askedFps; // asked for by a link, or in Settings > Quality
             rule = [NSString stringWithFormat:@"0:%ld:%ld", (long)fps, (long)fps];
         }
 
         NSMutableArray* arguments = [NSMutableArray arrayWithArray:@[@"stream", at, @"Desktop", @"--resolution", [NSString stringWithFormat:@"%ldx%ld", (long)pw, (long)ph],
                                                                      @"--fps", [NSString stringWithFormat:@"%ld", (long)fps],
                                                                      @"--absolute-mouse", @"--capture-system-keys", @"always", @"--quit-after", @"--no-vsync"]];
-        if ([device[@"bitrate"] integerValue] > 0) {
-            [arguments addObjectsFromArray:@[@"--bitrate", [device[@"bitrate"] stringValue]]];
+        // The device's own bitrate, else the one in Settings > Quality, else Moonlight's by size.
+        NSInteger kbps = [device[@"bitrate"] integerValue] ?: [NSUserDefaults.standardUserDefaults integerForKey:@"Bitrate"];
+        if (kbps > 0) {
+            [arguments addObjectsFromArray:@[@"--bitrate", [NSString stringWithFormat:@"%ld", (long)kbps]]];
         }
         NSMutableDictionary* environment = [NSMutableDictionary dictionary];
         environment[@"MOONLIGHT_CHROME"] = linux ? @"linux" : @"1";
@@ -549,11 +559,15 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 }
 
 // ---- links: moonlightnext://connect/<device>?size=1920x1080&fixed=3840x2160&truepixels=1&raw=1&pointer=0&bitrate=20000&fps=60
-//      and moonlightnext://show. What a link says holds for that one stream; the device's own settings stay.
+//      moonlightnext://show (this window) and moonlightnext://settings. What a link says holds for that one stream; the device's own settings stay.
 
 - (BOOL)open:(NSURL*)url
 {
     NSURLComponents* parts = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    if ([parts.host isEqualToString:@"settings"]) {
+        [self settings:nil];
+        return NO;
+    }
     if (![parts.host isEqualToString:@"connect"]) {
         [window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
@@ -811,6 +825,25 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 }
 
 @end
+
+NSArray* managerDevices()
+{
+    if (s_Devices == nil) {
+        loadDevices();
+    }
+    return s_Devices;
+}
+
+void managerSetDeviceBitrate(NSString* name, long kbps)
+{
+    for (NSMutableDictionary* device in managerDevices()) {
+        if ([device[@"name"] isEqualToString:name]) {
+            device[@"bitrate"] = @(kbps);
+        }
+    }
+    saveDevices();
+    [s_Manager show];
+}
 
 static bool s_OpenedByLink;
 static NSDate* s_StartedAt;

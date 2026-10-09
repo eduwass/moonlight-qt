@@ -161,7 +161,7 @@ macx {
         CONFIG += discord-rpc libplacebo
     }
 
-    LIBS += -lobjc -framework VideoToolbox -framework AVFoundation -framework CoreVideo -framework CoreGraphics -framework CoreMedia -framework AppKit -framework Metal -framework QuartzCore
+    LIBS += -lobjc -framework VideoToolbox -framework AVFoundation -framework CoreVideo -framework CoreGraphics -framework CoreMedia -framework AppKit -framework Metal -framework QuartzCore -framework CoreWLAN
     CONFIG += ffmpeg
 }
 
@@ -415,6 +415,7 @@ macx {
         streaming/chrome_mac.mm \
         streaming/chrome_settings_mac.mm \
         manager_mac.mm \
+        doctor_mac.mm \
         streaming/syskeys_mac.mm \
         streaming/video/ffmpeg-renderers/vt_base.mm \
         streaming/video/ffmpeg-renderers/vt_avsamplelayer.mm \

@@ -217,16 +217,48 @@ static void symbol(NSString* name, NSRect box, uint32_t colour, CGFloat size)
 }
 @end
 
+// doctor_mac.mm
+NSView* settingsQualityPane(NSRect frame);
+NSView* settingsDoctorPane(NSRect frame);
+
+enum { PANE_QUALITY, PANE_KEYS, PANE_DOCTOR, PANE_COUNT };
+static NSString* const k_PaneNames[PANE_COUNT] = {@"Quality", @"Keys", @"Doctor"};
+static NSString* const k_PaneSymbols[PANE_COUNT] = {@"dial.medium", @"keyboard", @"stethoscope"};
+
 @interface ChromeSettingsView : NSView {
 @public
     NSString* host;
+    int pane;
+    NSMutableArray<NSView*>* keyViews; // the recorders and their button
+    NSView* panes[PANE_COUNT];         // the others are views of their own
 }
+- (void)choose:(int)which;
 @end
 
 @implementation ChromeSettingsView
 - (BOOL)isFlipped { return YES; }
 - (BOOL)mouseDownCanMoveWindow { return YES; }
-- (void)mouseDown:(NSEvent*)event { [self.window makeFirstResponder:nil]; } // a click elsewhere stops a recording
+- (void)mouseDown:(NSEvent*)event
+{
+    [self.window makeFirstResponder:nil]; // a click elsewhere stops a recording
+    NSPoint at = [self convertPoint:event.locationInWindow fromView:nil];
+    for (int i = 0; i < PANE_COUNT; i++) {
+        if (NSPointInRect(at, NSMakeRect(10, 114 + i * 34, 195, 30))) {
+            [self choose:i];
+        }
+    }
+}
+- (void)choose:(int)which
+{
+    pane = which;
+    for (NSView* view in keyViews) {
+        view.hidden = pane != PANE_KEYS;
+    }
+    for (int i = 0; i < PANE_COUNT; i++) {
+        panes[i].hidden = i != pane;
+    }
+    self.needsDisplay = YES;
+}
 - (void)restore:(id)sender
 {
     memcpy(s_Bindings, k_Defaults, sizeof(s_Bindings));
@@ -250,17 +282,24 @@ static void symbol(NSString* name, NSRect box, uint32_t colour, CGFloat size)
     [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(18, 56, 36, 36) xRadius:9 yRadius:9] fill];
     symbol(@"moon.fill", NSMakeRect(18, 56, 36, 36), 0xECECECFF, 18);
     [@"Moonlight" drawAtPoint:NSMakePoint(64, 58) withAttributes:text(13, NSFontWeightSemibold, 0xECECECFF)];
-    [[NSString stringWithFormat:@"Streaming · %@", host] drawAtPoint:NSMakePoint(64, 76) withAttributes:text(11, NSFontWeightRegular, 0xA3A1A8FF)];
+    [(host.length > 0 ? host : @"Settings") drawAtPoint:NSMakePoint(64, 76) withAttributes:text(11, NSFontWeightRegular, 0xA3A1A8FF)];
 
-    // The one pane there is.
-    [rgba(0xFFFFFF24) setFill];
-    [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(10, 114, 195, 30) xRadius:6 yRadius:6] fill];
-    [rgba(0x636366FF) setFill];
-    [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(18, 119, 20, 20) xRadius:5 yRadius:5] fill];
-    symbol(@"keyboard", NSMakeRect(18, 119, 20, 20), 0xFFFFFFFF, 10);
-    [@"Keys" drawAtPoint:NSMakePoint(46, 121) withAttributes:text(13, NSFontWeightMedium, 0xFFFFFFFF)];
+    for (int i = 0; i < PANE_COUNT; i++) {
+        CGFloat y = 114 + i * 34;
+        if (i == pane) {
+            [rgba(0xFFFFFF24) setFill];
+            [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(10, y, 195, 30) xRadius:6 yRadius:6] fill];
+        }
+        [rgba(0x636366FF) setFill];
+        [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(18, y + 5, 20, 20) xRadius:5 yRadius:5] fill];
+        symbol(k_PaneSymbols[i], NSMakeRect(18, y + 5, 20, 20), 0xFFFFFFFF, 10);
+        [k_PaneNames[i] drawAtPoint:NSMakePoint(46, y + 7) withAttributes:text(13, NSFontWeightMedium, i == pane ? 0xFFFFFFFF : 0xD0D0D6FF)];
+    }
 
-    [@"Keys" drawAtPoint:NSMakePoint(236, 16) withAttributes:text(15, NSFontWeightSemibold, 0xECECECFF)];
+    [k_PaneNames[pane] drawAtPoint:NSMakePoint(236, 16) withAttributes:text(15, NSFontWeightSemibold, 0xECECECFF)];
+    if (pane != PANE_KEYS) {
+        return;
+    }
     NSRect card = NSMakeRect(236.5, 52.5, 481, 6 * 44 + 1);
     NSBezierPath* shape = [NSBezierPath bezierPathWithRoundedRect:card xRadius:8 yRadius:8];
     [rgba(0x343237FF) setFill];
@@ -299,17 +338,25 @@ void chromeSettingsOpen(const char* host)
         [window standardWindowButton:NSWindowZoomButton].enabled = NO;
 
         ChromeSettingsView* view = [[[ChromeSettingsView alloc] initWithFrame:NSMakeRect(0, 0, 740, 620)] autorelease];
+        view->keyViews = [[NSMutableArray alloc] init];
         for (int row = 0; row < KEY_COUNT; row++) {
             ChromeRecorder* recorder = [[[ChromeRecorder alloc] initWithFrame:NSMakeRect(506, 53 + row * 44 + 9, 200, 26)] autorelease];
             recorder->which = row;
             [view addSubview:recorder];
+            [view->keyViews addObject:recorder];
         }
+        view->panes[PANE_QUALITY] = settingsQualityPane(NSMakeRect(236, 52, 484, 540));
+        view->panes[PANE_DOCTOR] = settingsDoctorPane(NSMakeRect(236, 52, 484, 540));
+        [view addSubview:view->panes[PANE_QUALITY]];
+        [view addSubview:view->panes[PANE_DOCTOR]];
         NSButton* restore = [NSButton buttonWithTitle:@"Restore Defaults" target:view action:@selector(restore:)];
         restore.controlSize = NSControlSizeSmall;
         restore.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
         [restore sizeToFit];
         [restore setFrameOrigin:NSMakePoint(718 - restore.frame.size.width, 332)];
         [view addSubview:restore];
+        [view->keyViews addObject:restore];
+        [view choose:PANE_QUALITY];
         window.contentView = view;
         [window center];
     }
