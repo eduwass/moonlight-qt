@@ -22,7 +22,8 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
       m_FakeMouseCaptureActive(false),
       m_KeyboardCaptureActive(false),
       m_CaptureSystemKeysMode(prefs.captureSysKeysMode),
-      m_MouseCursorCapturedVisibilityState(SDL_DISABLE),
+      // Fork: MOONLIGHT_LOCAL_CURSOR starts with this machine's pointer shown (see cursorshare_mac.mm).
+      m_MouseCursorCapturedVisibilityState(qEnvironmentVariableIsSet("MOONLIGHT_LOCAL_CURSOR") ? SDL_ENABLE : SDL_DISABLE),
       m_LongPressTimer(0),
       m_StreamWidth(streamWidth),
       m_StreamHeight(streamHeight),

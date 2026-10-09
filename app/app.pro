@@ -193,6 +193,7 @@ SOURCES += \
     streaming/input/reltouch.cpp \
     streaming/session.cpp \
     streaming/dynres.cpp \
+    streaming/netpath.cpp \
     streaming/audio/audio.cpp \
     streaming/audio/renderers/sdlaud.cpp \
     gui/computermodel.cpp \
@@ -409,6 +410,9 @@ macx {
     message(VideoToolbox renderer selected)
 
     SOURCES += \
+        streaming/dynres_mac.mm \
+        streaming/cursorshare_mac.mm \
+        streaming/syskeys_mac.mm \
         streaming/video/ffmpeg-renderers/vt_base.mm \
         streaming/video/ffmpeg-renderers/vt_avsamplelayer.mm \
         streaming/video/ffmpeg-renderers/vt_metal.mm

@@ -24,65 +24,292 @@
 #define DYNRES_MIN_WIDTH 640
 #define DYNRES_MIN_HEIGHT 360
 
-// Only one session streams at a time, so plain statics are enough.
+// The cover comes off this long after the new stream's first packets, which is
+// enough for the first frame to be decoded and drawn underneath it.
+#define DYNRES_FIRST_FRAME_MS 150
+
+// If the new stream never shows up, uncover the window anyway.
+#define DYNRES_COVER_MAX_MS 6000
+
+// A connection that brings no video within this long is made again, up to this
+// many times. Sunshine on macOS now and then starts a session sending video to
+// the client's audio port (seen in about one connect in fifteen); left alone,
+// the session dies ten seconds later with "no video traffic".
+#define DYNRES_NO_VIDEO_MS 3000
+#define DYNRES_MAX_RETRIES 2
+
+// The event loop sleeps until an event arrives; these keep it turning while we
+// are waiting on a clock instead.
+#define DYNRES_WAKE_MS 30
+
+// While the stream restarts, the window is covered with a dimmed picture of
+// itself and a spinner (dynres_mac.mm). Other platforms show a blank window.
+#ifdef Q_OS_DARWIN
+void dynresBusy(SDL_Window* window, bool busy);
+void sysKeysSessionStarted(); // syskeys_mac.mm; called from here because this is the fork's one hook into a session
+void cursorShareStart(const char* host); // cursorshare_mac.mm
+#else
+static void dynresBusy(SDL_Window*, bool) {}
+static void sysKeysSessionStarted() {}
+static void cursorShareStart(const char*) {}
+#endif
+
+void netPathUpdate(const QString& host); // netpath.cpp
+
+// Only one session streams at a time, so plain statics are enough. A new
+// session is recognised by its window id (ids are never reused, unlike the
+// addresses of Session objects) and starts from a clean slate.
+static Uint32 s_WindowId;
 static int s_SeenWidth, s_SeenHeight;
 static Uint32 s_SeenAt;
 static bool s_Changed;
+static bool s_Sized;
+
+enum {
+    COVER_OFF,
+    COVER_UNTIL_DECODER, // until the event loop has built the new decoder
+    COVER_UNTIL_PACKETS, // until the new stream delivers video
+    COVER_UNTIL_DRAWN,   // until that video has had time to reach the screen
+};
+static int s_Cover;
+static Uint32 s_CoverAt, s_PacketsAt;
+
+// Waiting for a new connection's first video packets.
+static bool s_Await, s_Retry;
+static Uint32 s_AwaitAt;
+static int s_Retries;
+
+static SDL_atomic_t s_WantWake, s_WakeUntil;
+static Uint32 s_WakeEvent;
+static SDL_TimerID s_WakeTimer;
+
+// Nobody tells this file that a session has ended, so the timer gives up by
+// itself if dynresTick() has stopped renewing it.
+#define DYNRES_WAKE_LEASE_MS 2000
+
+static Uint32 wakeTimer(Uint32 interval, void*)
+{
+    if (!SDL_AtomicGet(&s_WantWake) ||
+            (Sint32)(SDL_GetTicks() - (Uint32)SDL_AtomicGet(&s_WakeUntil)) > 0) {
+        SDL_AtomicSet(&s_WantWake, 0);
+        return 0;
+    }
+
+    SDL_Event event = {};
+    event.type = s_WakeEvent;
+    SDL_PushEvent(&event);
+    return interval;
+}
+
+static void setWake(bool want)
+{
+    SDL_AtomicSet(&s_WakeUntil, (int)(SDL_GetTicks() + DYNRES_WAKE_LEASE_MS));
+    if (!!SDL_AtomicGet(&s_WantWake) == want) {
+        return;
+    }
+
+    if (s_WakeEvent == 0) {
+        // The first id SDL hands out is SDL_USEREVENT itself, which the event
+        // loop reads as "a frame is ready"; take the next one.
+        s_WakeEvent = SDL_RegisterEvents(1);
+        if (s_WakeEvent == SDL_USEREVENT) {
+            s_WakeEvent = SDL_RegisterEvents(1);
+        }
+    }
+
+    // A timer that saw the flag clear has already ended itself; removing it
+    // again is harmless.
+    SDL_RemoveTimer(s_WakeTimer);
+    SDL_AtomicSet(&s_WantWake, want);
+    s_WakeTimer = want ? SDL_AddTimer(DYNRES_WAKE_MS, wakeTimer, nullptr) : 0;
+}
+
+// MOONLIGHT_FPS_ABOVE=<pixels>:<fps>:<full fps> picks the frame rate by size on
+// every restart: <fps> for streams larger than <pixels>, <full fps> otherwise.
+// For hosts whose encoder cannot keep up with big frames at the full rate: an
+// M1 at 60 fps and 3200x1800 sometimes let frames back up for a whole session
+// (87 ms of host latency instead of 21); at 40 fps it never did. Whoever
+// launches Moonlight applies the same rule to the --fps it starts with.
+static int fpsFor(int width, int height, int fps)
+{
+    static int abovePixels = -1, aboveFps, fullFps;
+    if (abovePixels < 0) {
+        abovePixels = 0;
+        QList<QByteArray> rule = qgetenv("MOONLIGHT_FPS_ABOVE").split(':');
+        if (rule.size() == 3 && rule[0].toInt() > 0 && rule[1].toInt() > 0 && rule[2].toInt() > 0) {
+            abovePixels = rule[0].toInt();
+            aboveFps = rule[1].toInt();
+            fullFps = rule[2].toInt();
+        }
+    }
+    if (abovePixels == 0) {
+        return fps;
+    }
+    return width * height > abovePixels ? aboveFps : fullFps;
+}
 
 // Called from every turn of Session::exec()'s event loop.
 // Returns false if the stream could not be restarted and the session must end.
 bool Session::dynresTick()
 {
-    // No decoder means we are not streaming yet, or are mid-restart. Starting
-    // over here makes the first size we see the baseline rather than a change,
-    // so the window Moonlight opens on its own never triggers a reconnect.
+    Uint32 now = SDL_GetTicks();
+
+    if (SDL_GetWindowID(m_Window) != s_WindowId) {
+        // Whatever the last session left behind (it may have ended mid-restart).
+        s_WindowId = SDL_GetWindowID(m_Window);
+        dynresBusy(m_Window, false);
+        s_Cover = COVER_OFF;
+        s_SeenWidth = s_SeenHeight = 0;
+        s_Changed = s_Sized = s_Retry = false;
+        s_Await = true;
+        s_AwaitAt = 0;
+        s_Retries = 0;
+        setWake(false);
+        sysKeysSessionStarted();
+        netPathUpdate(m_Computer->activeAddress.address());
+        if (qEnvironmentVariableIsSet("MOONLIGHT_LOCAL_CURSOR")) {
+            cursorShareStart(m_Computer->activeAddress.address().toUtf8().constData());
+        }
+    }
+
+    if (s_Changed || s_Await || s_Cover != COVER_OFF) {
+        setWake(true); // renew the lease
+    }
+
+    if (s_Cover != COVER_OFF) {
+        if (s_Cover == COVER_UNTIL_DECODER && m_VideoDecoder != nullptr &&
+                !SDL_HasEvent(SDL_RENDER_DEVICE_RESET)) {
+            // The new renderer has put its view over our cover.
+            dynresBusy(m_Window, true);
+            s_Cover = COVER_UNTIL_PACKETS;
+        }
+        // The count starts at zero with every connection, so anything above
+        // it is video from the new one, even if the host then goes quiet.
+        else if (s_Cover == COVER_UNTIL_PACKETS &&
+                 LiGetRTPVideoStats()->packetCountVideo != 0) {
+            s_PacketsAt = now;
+            s_Cover = COVER_UNTIL_DRAWN;
+        }
+
+        if ((s_Cover == COVER_UNTIL_DRAWN && now - s_PacketsAt >= DYNRES_FIRST_FRAME_MS) ||
+                now - s_CoverAt >= DYNRES_COVER_MAX_MS) {
+            dynresBusy(m_Window, false);
+            s_Cover = COVER_OFF;
+            setWake(s_Changed);
+        }
+    }
+
+    // No decoder means we are not streaming yet, or are mid-restart. Start
+    // over, so that the first size seen afterwards is judged against the
+    // stream rather than against a size from before.
     if (m_VideoDecoder == nullptr) {
         s_SeenWidth = s_SeenHeight = 0;
         return true;
     }
 
-    if (SDL_GetWindowFlags(m_Window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MINIMIZED)) {
-        return true;
+    if (s_Await) {
+        if (LiGetRTPVideoStats()->packetCountVideo != 0) {
+            s_Await = false;
+            s_Retries = 0;
+        }
+        else if (s_AwaitAt == 0) {
+            s_AwaitAt = now;
+        }
+        else if (now - s_AwaitAt >= DYNRES_NO_VIDEO_MS) {
+            // Out of retries: leave it to the ten second limit to end the session.
+            s_Await = false;
+            s_Retry = s_Retries++ < DYNRES_MAX_RETRIES;
+        }
     }
+
+    bool windowed = !(SDL_GetWindowFlags(m_Window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MINIMIZED));
 
     // Pixels, not points: on a Retina display this is what makes one stream
     // pixel land on one screen pixel. Encoders want even dimensions.
     int width, height;
     SDL_GetWindowSizeInPixels(m_Window, &width, &height);
-    width &= ~1;
-    height &= ~1;
 
-    Uint32 now = SDL_GetTicks();
-    if (width != s_SeenWidth || height != s_SeenHeight) {
-        s_Changed = s_SeenWidth != 0;
-        s_SeenWidth = width;
-        s_SeenHeight = height;
-        s_SeenAt = now;
-        return true;
+    // Moonlight sizes its window as if stream pixels were points and then
+    // shrinks it to fit the screen, so a 3840x2160 stream on a Retina display
+    // opens slightly scaled. Once, when a session starts in a window, give the
+    // stream its exact size. If that does not fit the screen the window comes
+    // out smaller, and the usual resize path below then matches the stream to
+    // it instead.
+    if (!s_Sized) {
+        s_Sized = true;
+        int pointWidth, pointHeight;
+        SDL_GetWindowSize(m_Window, &pointWidth, &pointHeight);
+        if (windowed && pointWidth > 0 && (width != m_StreamConfig.width || height != m_StreamConfig.height)) {
+            double scale = (double)width / pointWidth;
+            SDL_SetWindowSize(m_Window, (int)(m_StreamConfig.width / scale + 0.5),
+                              (int)(m_StreamConfig.height / scale + 0.5));
+            s_SeenWidth = s_SeenHeight = 0;
+            return true;
+        }
     }
 
-    if (!s_Changed || now - s_SeenAt < DYNRES_SETTLE_MS) {
-        return true;
+    if (s_Retry) {
+        s_Retry = false;
+        width = m_StreamConfig.width;
+        height = m_StreamConfig.height;
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "No video %d ms after connecting; connecting again (attempt %d of %d)",
+                    DYNRES_NO_VIDEO_MS, s_Retries, DYNRES_MAX_RETRIES);
     }
+    else {
+        if (!windowed) {
+            // Whatever was settling is moot; fullscreen has its own size.
+            s_Changed = false;
+            setWake(s_Cover != COVER_OFF);
+            return true;
+        }
 
-    // Still dragging the window edge: wait for the button to come up.
-    if (SDL_GetGlobalMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) {
-        s_SeenAt = now;
-        return true;
+        width &= ~1;
+        height &= ~1;
+
+        if (width != s_SeenWidth || height != s_SeenHeight) {
+            // The first size seen after a (re)start counts as a change only if the
+            // stream does not already match it: the window may have been resized
+            // while we were busy restarting, or clamped to the screen when sized.
+            s_Changed = s_SeenWidth != 0 || width != m_StreamConfig.width || height != m_StreamConfig.height;
+            s_SeenWidth = width;
+            s_SeenHeight = height;
+            s_SeenAt = now;
+            // Nothing may happen in the window while we wait for it to settle.
+            setWake(s_Changed || s_Cover != COVER_OFF);
+            return true;
+        }
+
+        if (!s_Changed || now - s_SeenAt < DYNRES_SETTLE_MS) {
+            return true;
+        }
+
+        // Still dragging the window edge: wait for the button to come up.
+        if (SDL_GetGlobalMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) {
+            s_SeenAt = now;
+            return true;
+        }
+
+        s_Changed = false;
+        setWake(s_Cover != COVER_OFF);
+
+        if ((width == m_StreamConfig.width && height == m_StreamConfig.height) ||
+                width < DYNRES_MIN_WIDTH || height < DYNRES_MIN_HEIGHT) {
+            return true;
+        }
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Window is now %dx%d; restarting the %dx%d stream to match",
+                    width, height, m_StreamConfig.width, m_StreamConfig.height);
     }
-
-    s_Changed = false;
-
-    if ((width == m_StreamConfig.width && height == m_StreamConfig.height) ||
-            width < DYNRES_MIN_WIDTH || height < DYNRES_MIN_HEIGHT) {
-        return true;
-    }
-
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "Window is now %dx%d; restarting the %dx%d stream to match",
-                width, height, m_StreamConfig.width, m_StreamConfig.height);
 
     m_InputHandler->raiseAllKeys();
+
+    // Everything from here to the first new frame happens behind the cover.
+    dynresBusy(m_Window, true);
+    s_Cover = COVER_UNTIL_DECODER;
+    s_CoverAt = now;
+    setWake(true);
 
     // Same order as the normal exit path: the decoder has to be gone before
     // LiStopConnection().
@@ -109,6 +336,7 @@ bool Session::dynresTick()
 
     m_StreamConfig.width = width;
     m_StreamConfig.height = height;
+    m_StreamConfig.fps = fpsFor(width, height, m_Preferences->fps);
     m_InputHandler->setStreamSize(width, height);
 
     // LiStartConnection() fills unset callbacks with stubs in our struct. A
@@ -118,8 +346,17 @@ bool Session::dynresTick()
     }
 
     if (!startConnectionAsync()) {
+        dynresBusy(m_Window, false);
+        s_Cover = COVER_OFF;
+        setWake(false);
         return false;
     }
+
+    // The calls above block for seconds; the cover's time limit is for what
+    // comes after them.
+    s_CoverAt = SDL_GetTicks();
+    s_Await = true;
+    s_AwaitAt = 0;
 
     // LiStartConnection() only recorded the new format (see drSetup()). The
     // decoder itself is built by the event loop's renderer reset path.
