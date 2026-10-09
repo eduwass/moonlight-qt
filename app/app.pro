@@ -412,6 +412,7 @@ macx {
     SOURCES += \
         streaming/dynres_mac.mm \
         streaming/cursorshare_mac.mm \
+        streaming/chrome_mac.mm \
         streaming/syskeys_mac.mm \
         streaming/video/ffmpeg-renderers/vt_base.mm \
         streaming/video/ffmpeg-renderers/vt_avsamplelayer.mm \

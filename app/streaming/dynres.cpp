@@ -11,6 +11,7 @@
 #include "backend/nvhttp.h"
 #include "streaming/input/input.h"
 #include "streaming/video/decoder.h"
+#include "streaming/chrome.h"
 
 #include <Limelight.h>
 #include "SDL_compat.h"
@@ -81,6 +82,14 @@ static bool s_Sized;
 // with it on, and `notifyutil -p dev.eduwass.moonlight.panel-pixels` flips it
 // in a running session.
 static bool s_PanelPixels;
+
+// The window's own chrome (chrome_mac.mm), with MOONLIGHT_CHROME. Its clicks
+// arrive while AppKit handles an event, and are acted on at the next tick.
+static bool s_Chrome;
+static int s_ChromeAsked;      // one bit per CHROME_ action
+static bool s_Follow = true;   // restart the stream when the window's size changes
+static bool s_ResizeOnce;      // a restart the user asked for, whatever s_Follow says
+static char s_Host[64];
 
 enum {
     COVER_OFF,
@@ -172,7 +181,62 @@ static void panelToggled()
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Panel pixels: %s", s_PanelPixels ? "on" : "off");
     // Have the size looked at again, and the event loop turn while it settles.
     s_SeenWidth = s_SeenHeight = 0;
+    s_ResizeOnce = true;
     setWake(true);
+}
+
+static void chromeAsked(int action)
+{
+    if (action != CHROME_SHOWN) {
+        s_ChromeAsked |= 1 << action;
+    }
+    setWake(true);
+}
+
+// Good, fair or poor, from what the link is doing: the worst reading decides,
+// and a relayed Tailscale path is a reason by itself. A worse verdict has to
+// hold for three seconds before it shows, a better one shows at once.
+static void judgeLink(ChromeState& state, Uint32 now)
+{
+    static Uint32 sampledAt, worseSince;
+    static uint32_t lastVideo, lastFailed;
+    static double lost;
+    static int shown;
+
+    uint32_t rtt = 0, variance = 0;
+    LiGetEstimatedRttInfo(&rtt, &variance);
+    state.delayMs = (int)rtt;
+
+    // Counted over two seconds at a time; the counters start again with every connection.
+    const RTP_VIDEO_STATS* rtp = LiGetRTPVideoStats();
+    if (rtp->packetCountVideo < lastVideo || now - sampledAt >= 2000) {
+        if (rtp->packetCountVideo > lastVideo && rtp->packetCountFecFailed >= lastFailed) {
+            lost = 100.0 * (rtp->packetCountFecFailed - lastFailed) / (rtp->packetCountVideo - lastVideo);
+        }
+        lastVideo = rtp->packetCountVideo;
+        lastFailed = rtp->packetCountFecFailed;
+        sampledAt = now;
+    }
+    state.lostPercent = lost;
+
+    int verdict = CHROME_GOOD;
+    if (state.delayMs >= CHROME_DELAY_POOR_MS || lost >= CHROME_LOSS_POOR_PERCENT || state.relayed) {
+        verdict = CHROME_POOR;
+    }
+    else if (state.delayMs >= CHROME_DELAY_FAIR_MS || lost >= CHROME_LOSS_FAIR_PERCENT) {
+        verdict = CHROME_FAIR;
+    }
+    if (verdict <= shown) {
+        shown = verdict;
+        worseSince = 0;
+    }
+    else if (worseSince == 0) {
+        worseSince = now ? now : 1;
+    }
+    else if (now - worseSince >= 3000) {
+        shown = verdict;
+    }
+    state.verdict = shown;
 }
 
 // Called from every turn of Session::exec()'s event loop.
@@ -198,11 +262,68 @@ bool Session::dynresTick()
             cursorShareStart(m_Computer->activeAddress.address().toUtf8().constData());
         }
         dynresChromeless(m_Window, qEnvironmentVariableIntValue("MOONLIGHT_CHROMELESS"));
+        s_Chrome = qEnvironmentVariableIsSet("MOONLIGHT_CHROME");
+        s_ChromeAsked = 0;
+        s_Follow = true;
+        if (s_Chrome) {
+            SDL_strlcpy(s_Host, m_Computer->name.toUtf8().constData(), sizeof(s_Host));
+            dynresChromeless(m_Window, 2);
+            chromeStart(m_Window, chromeAsked);
+        }
         static bool watching;
         if (!watching) {
             watching = true;
             s_PanelPixels = qEnvironmentVariableIsSet("MOONLIGHT_PANEL_PIXELS");
             dynresOnPanelToggle(panelToggled);
+        }
+    }
+
+    if (s_Chrome) {
+        int asked = s_ChromeAsked;
+        s_ChromeAsked = 0;
+        if (asked & (1 << CHROME_STATS)) {
+            m_OverlayManager.setOverlayState(Overlay::OverlayDebug, !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
+        }
+        if (asked & (1 << CHROME_TRUE_PIXELS)) {
+            panelToggled();
+        }
+        if (asked & (1 << CHROME_FOLLOW)) {
+            s_Follow = !s_Follow;
+            s_SeenWidth = s_SeenHeight = 0;
+        }
+        if (asked & (1 << CHROME_FULLSCREEN)) {
+            toggleFullscreen();
+        }
+
+        // Twice a second is plenty for what the bar shows, and at once after a click.
+        static Uint32 toldAt;
+        static bool wasFullscreen;
+        bool fullscreen = (SDL_GetWindowFlags(m_Window) & SDL_WINDOW_FULLSCREEN) != 0;
+        if (asked != 0 || now - toldAt >= 500) {
+            toldAt = now;
+            if (wasFullscreen && !fullscreen) {
+                // SDL rebuilt the window's style on the way out of fullscreen.
+                dynresChromeless(m_Window, 2);
+            }
+            wasFullscreen = fullscreen;
+
+            ChromeState state = {};
+            state.stats = m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug);
+            state.truePixels = s_PanelPixels;
+            state.followSize = s_Follow;
+            state.fullscreen = fullscreen;
+            state.busy = s_Cover != COVER_OFF;
+            state.link = netPathLink();
+            state.relayed = netPathRelayed();
+            state.width = m_StreamConfig.width;
+            state.height = m_StreamConfig.height;
+            state.fps = m_StreamConfig.fps;
+            SDL_strlcpy(state.host, s_Host, sizeof(state.host));
+            judgeLink(state, now);
+            chromeUpdate(&state);
+        }
+        if (chromeShown()) {
+            setWake(true); // keep the numbers moving while they are on screen
         }
     }
 
@@ -306,8 +427,9 @@ bool Session::dynresTick()
                     DYNRES_NO_VIDEO_MS, s_Retries, DYNRES_MAX_RETRIES);
     }
     else {
-        if (flags & SDL_WINDOW_MINIMIZED) {
-            // Whatever was settling is moot until the window is back.
+        if ((flags & SDL_WINDOW_MINIMIZED) || (!s_Follow && !s_ResizeOnce)) {
+            // Whatever was settling is moot: the window is away, or the stream
+            // has been told to keep its size.
             s_Changed = false;
             setWake(s_Cover != COVER_OFF);
             return true;
@@ -353,6 +475,7 @@ bool Session::dynresTick()
     }
 
     m_InputHandler->raiseAllKeys();
+    s_ResizeOnce = false;
 
     // Everything from here to the first new frame happens behind the cover.
     dynresBusy(m_Window, true);
