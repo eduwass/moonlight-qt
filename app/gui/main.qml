@@ -36,6 +36,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         // Show the window according to the user's preferences
+        if (initialView === "qrc:/gui/CliStartStreamSegue.qml") {} else // fork: no launcher window
         if (SystemProperties.hasDesktopEnvironment) {
             if (StreamingPreferences.uiDisplayMode == StreamingPreferences.UI_MAXIMIZED) {
                 window.showMaximized()

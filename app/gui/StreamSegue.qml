@@ -56,7 +56,7 @@ Item {
         stackView.replace(stackView.currentItem, component.createObject(stackView, {"appName": appName}), StackView.Immediate)
 
         // Show the Qt window again to show quit segue
-        window.visible = true
+        window.visible = !quitAfter // fork: not for command line streams
     }
 
     function sessionFinished(portTestResult)

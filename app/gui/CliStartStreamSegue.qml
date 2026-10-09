@@ -23,12 +23,14 @@ Item {
     }
 
     function onLaunchFailed(message) {
+        window.visible = true // fork: the launcher window starts hidden
         errorDialog.text = message
         errorDialog.open()
         console.error(message)
     }
 
     function onAppQuitRequired(appName) {
+        window.visible = true // fork: the launcher window starts hidden
         quitAppDialog.appName = appName
         quitAppDialog.open()
     }
