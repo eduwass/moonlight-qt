@@ -210,6 +210,36 @@ void dynresOnPanelToggle(void (*toggled)())
     });
 }
 
+
+// MOONLIGHT_RAW_COLOR: the stream's colour values go to the screen as they
+// are, which is what the host's own cable to this monitor would carry. macOS
+// otherwise fits them to the display, and a desktop that was tuned by eye on a
+// wide-gamut monitor then looks washed out next to its usual self. Done by
+// telling the layer its picture is already in the display's colours.
+// ponytail: the main display's colours, wherever the window is.
+static void rawColorIn(NSView* view, CGColorSpaceRef display)
+{
+    if ([view.layer isKindOfClass:[CAMetalLayer class]]) {
+        CAMetalLayer* layer = (CAMetalLayer*)view.layer;
+        if (layer.colorspace == nullptr || !CFEqual(layer.colorspace, display)) {
+            layer.colorspace = display;
+        }
+    }
+    for (NSView* child in view.subviews) {
+        rawColorIn(child, display);
+    }
+}
+
+void dynresRawColor(SDL_Window* window)
+{
+    static CGColorSpaceRef display = CGDisplayCopyColorSpace(CGMainDisplayID());
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (display != nullptr && SDL_GetWindowWMInfo(window, &info) && info.subsystem == SDL_SYSWM_COCOA) {
+        rawColorIn(info.info.cocoa.window.contentView, display);
+    }
+}
+
 // Experiment (MOONLIGHT_CHROMELESS): the stream fills the whole window, title
 // bar strip included, and the traffic lights are hidden. It answers one
 // question before any hover bar is built: do clicks in the old title bar strip

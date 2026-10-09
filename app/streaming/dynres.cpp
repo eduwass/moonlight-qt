@@ -52,6 +52,7 @@ void cursorShareStart(const char* host); // cursorshare_mac.mm
 double dynresPanelScale(SDL_Window* window);
 void dynresOnPanelToggle(void (*toggled)());
 void dynresChromeless(SDL_Window* window, int mode);
+void dynresRawColor(SDL_Window* window);
 #else
 static void dynresBusy(SDL_Window*, bool) {}
 static void sysKeysSessionStarted() {}
@@ -59,6 +60,7 @@ static void cursorShareStart(const char*) {}
 static double dynresPanelScale(SDL_Window*) { return 1; }
 static void dynresOnPanelToggle(void (*)()) {}
 static void dynresChromeless(SDL_Window*, int) {}
+static void dynresRawColor(SDL_Window*) {}
 #endif
 
 void netPathUpdate(const QString& host); // netpath.cpp
@@ -245,6 +247,15 @@ static void judgeLink(ChromeState& state, Uint32 now)
 bool Session::dynresTick()
 {
     Uint32 now = SDL_GetTicks();
+
+    // MOONLIGHT_RAW_COLOR, see dynres_mac.mm. Kept up, because every new
+    // renderer brings a new layer with it.
+    static const bool rawColor = qEnvironmentVariableIsSet("MOONLIGHT_RAW_COLOR");
+    static Uint32 rawColorAt;
+    if (rawColor && now - rawColorAt >= 100) {
+        rawColorAt = now;
+        dynresRawColor(m_Window);
+    }
 
     if (SDL_GetWindowID(m_Window) != s_WindowId) {
         // Whatever the last session left behind (it may have ended mid-restart).

@@ -770,16 +770,6 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     s_WindowedFrame = NSZeroRect;
     s_KeysOurs.clear();
     s_KeysRemote.clear();
-    // Where the window is, for the way back, as it leaves for fullscreen by any route.
-    static id watcher;
-    if (watcher != nil) {
-        [NSNotificationCenter.defaultCenter removeObserver:watcher];
-        [watcher release];
-    }
-    watcher = [[NSNotificationCenter.defaultCenter addObserverForName:NSWindowWillEnterFullScreenNotification object:w queue:nil
-                                                           usingBlock:^(NSNotification* note) {
-        s_WindowedFrame = ((NSWindow*)note.object).frame;
-    }] retain];
 
     CGFloat top = content.bounds.size.height, middle = round(content.bounds.size.width / 2);
     NSAutoresizingMaskOptions pinned = NSViewMinXMargin | NSViewMaxXMargin | NSViewMinYMargin;
