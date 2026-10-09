@@ -13,6 +13,7 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include <dlfcn.h>
+#include <notify.h>
 
 #define SPINNER_SIZE 34
 
@@ -134,4 +135,73 @@ void dynresBusy(SDL_Window* window, bool busy)
 
         s_Cover = cover;
     }
+}
+
+// How much of what macOS draws on the window's screen the panel really has, per
+// axis: 1 on a display running at its own resolution, 0.8 for "looks like
+// 3200x1350" on a 5120x2160 panel (drawn at 6400x2700).
+double dynresPanelScale(SDL_Window* window)
+{
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_COCOA) {
+        return 1;
+    }
+
+    @autoreleasepool {
+        NSScreen* screen = info.info.cocoa.window.screen ?: NSScreen.mainScreen;
+        CGDirectDisplayID display = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
+
+        CGDisplayModeRef current = CGDisplayCopyDisplayMode(display);
+        if (current == nullptr) {
+            return 1;
+        }
+        size_t drawn = CGDisplayModeGetPixelWidth(current);
+        CGDisplayModeRelease(current);
+
+        // The panel's own width. macOS marks the panel's mode as native; where it
+        // marks none, take the widest mode that is one pixel per point, which is
+        // the panel on every display seen so far but is a guess.
+        const uint32_t nativeFlag = 0x02000000; // kDisplayModeNativeFlag, IOGraphicsTypes.h
+        size_t panel = 0, widestPlain = 0;
+        NSDictionary* everyMode = @{(id)kCGDisplayShowDuplicateLowResolutionModes: @YES};
+        CFArrayRef modes = CGDisplayCopyAllDisplayModes(display, (CFDictionaryRef)everyMode);
+        for (CFIndex i = 0; modes != nullptr && i < CFArrayGetCount(modes); i++) {
+            CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+            size_t pixels = CGDisplayModeGetPixelWidth(mode);
+            if ((CGDisplayModeGetIOFlags(mode) & nativeFlag) && pixels > panel) {
+                panel = pixels;
+            }
+            if (pixels == CGDisplayModeGetWidth(mode) && pixels > widestPlain) {
+                widestPlain = pixels;
+            }
+        }
+        if (modes != nullptr) {
+            CFRelease(modes);
+        }
+        bool marked = panel != 0;
+        if (!marked) {
+            panel = widestPlain;
+        }
+
+        static size_t s_LoggedDrawn, s_LoggedPanel;
+        if (drawn != s_LoggedDrawn || panel != s_LoggedPanel) {
+            s_LoggedDrawn = drawn;
+            s_LoggedPanel = panel;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Panel pixels: the screen is drawn %zu wide, the panel has %zu (%s)",
+                        drawn, panel, marked ? "marked native" : panel != 0 ? "widest plain mode" : "unknown");
+        }
+        return panel == 0 || drawn <= panel ? 1 : (double)panel / drawn;
+    }
+}
+
+// Calls toggled() on the main thread whenever someone posts the notification:
+//   notifyutil -p dev.eduwass.moonlight.panel-pixels
+void dynresOnPanelToggle(void (*toggled)())
+{
+    int token;
+    // The main thread sits in SDL's event loop, which runs the main queue.
+    notify_register_dispatch("dev.eduwass.moonlight.panel-pixels", &token, dispatch_get_main_queue(), ^(int) {
+        toggled();
+    });
 }

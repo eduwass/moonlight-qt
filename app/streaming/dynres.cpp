@@ -48,10 +48,14 @@
 void dynresBusy(SDL_Window* window, bool busy);
 void sysKeysSessionStarted(); // syskeys_mac.mm; called from here because this is the fork's one hook into a session
 void cursorShareStart(const char* host); // cursorshare_mac.mm
+double dynresPanelScale(SDL_Window* window);
+void dynresOnPanelToggle(void (*toggled)());
 #else
 static void dynresBusy(SDL_Window*, bool) {}
 static void sysKeysSessionStarted() {}
 static void cursorShareStart(const char*) {}
+static double dynresPanelScale(SDL_Window*) { return 1; }
+static void dynresOnPanelToggle(void (*)()) {}
 #endif
 
 void netPathUpdate(const QString& host); // netpath.cpp
@@ -64,6 +68,17 @@ static int s_SeenWidth, s_SeenHeight;
 static Uint32 s_SeenAt;
 static bool s_Changed;
 static bool s_Sized;
+
+// Stream only the pixels the panel has. macOS draws a scaled display mode
+// ("looks like 3200x1350" on a 5120x2160 panel) at twice the points and
+// shrinks the result to the panel, so a stream at the window's full pixel size
+// carries 5 pixels for every 4 that reach the glass: a third more to encode
+// for nothing. With this on, the stream is the window's size in panel pixels.
+// The picture is then scaled twice on its way to the glass and may come out a
+// little softer, which is why it is a switch: MOONLIGHT_PANEL_PIXELS starts
+// with it on, and `notifyutil -p dev.eduwass.moonlight.panel-pixels` flips it
+// in a running session.
+static bool s_PanelPixels;
 
 enum {
     COVER_OFF,
@@ -148,6 +163,16 @@ static int fpsFor(int width, int height, int fps)
     return width * height > abovePixels ? aboveFps : fullFps;
 }
 
+// Runs on the main thread when the switch is flipped from outside.
+static void panelToggled()
+{
+    s_PanelPixels = !s_PanelPixels;
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Panel pixels: %s", s_PanelPixels ? "on" : "off");
+    // Have the size looked at again, and the event loop turn while it settles.
+    s_SeenWidth = s_SeenHeight = 0;
+    setWake(true);
+}
+
 // Called from every turn of Session::exec()'s event loop.
 // Returns false if the stream could not be restarted and the session must end.
 bool Session::dynresTick()
@@ -169,6 +194,12 @@ bool Session::dynresTick()
         netPathUpdate(m_Computer->activeAddress.address());
         if (qEnvironmentVariableIsSet("MOONLIGHT_LOCAL_CURSOR")) {
             cursorShareStart(m_Computer->activeAddress.address().toUtf8().constData());
+        }
+        static bool watching;
+        if (!watching) {
+            watching = true;
+            s_PanelPixels = qEnvironmentVariableIsSet("MOONLIGHT_PANEL_PIXELS");
+            dynresOnPanelToggle(panelToggled);
         }
     }
 
@@ -222,12 +253,27 @@ bool Session::dynresTick()
         }
     }
 
-    bool windowed = !(SDL_GetWindowFlags(m_Window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MINIMIZED));
+    Uint32 flags = SDL_GetWindowFlags(m_Window);
+    bool windowed = !(flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MINIMIZED));
 
     // Pixels, not points: on a Retina display this is what makes one stream
     // pixel land on one screen pixel. Encoders want even dimensions.
     int width, height;
     SDL_GetWindowSizeInPixels(m_Window, &width, &height);
+    if (s_PanelPixels) {
+        // Asking the display for its modes is not free and this runs on every
+        // event; the answer only changes when the window changes screens.
+        static double share = 1;
+        static Uint32 askedAt;
+        // Shorter than the settle time, so a window that has moved to another
+        // screen is never restarted with the old screen's answer.
+        if (askedAt == 0 || now - askedAt >= 250) {
+            askedAt = now ? now : 1;
+            share = dynresPanelScale(m_Window);
+        }
+        width = (int)(width * share + 0.5);
+        height = (int)(height * share + 0.5);
+    }
 
     // Moonlight sizes its window as if stream pixels were points and then
     // shrinks it to fit the screen, so a 3840x2160 stream on a Retina display
@@ -257,8 +303,8 @@ bool Session::dynresTick()
                     DYNRES_NO_VIDEO_MS, s_Retries, DYNRES_MAX_RETRIES);
     }
     else {
-        if (!windowed) {
-            // Whatever was settling is moot; fullscreen has its own size.
+        if (flags & SDL_WINDOW_MINIMIZED) {
+            // Whatever was settling is moot until the window is back.
             s_Changed = false;
             setWake(s_Cover != COVER_OFF);
             return true;
