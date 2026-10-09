@@ -50,12 +50,14 @@ void sysKeysSessionStarted(); // syskeys_mac.mm; called from here because this i
 void cursorShareStart(const char* host); // cursorshare_mac.mm
 double dynresPanelScale(SDL_Window* window);
 void dynresOnPanelToggle(void (*toggled)());
+void dynresChromeless(SDL_Window* window, int mode);
 #else
 static void dynresBusy(SDL_Window*, bool) {}
 static void sysKeysSessionStarted() {}
 static void cursorShareStart(const char*) {}
 static double dynresPanelScale(SDL_Window*) { return 1; }
 static void dynresOnPanelToggle(void (*)()) {}
+static void dynresChromeless(SDL_Window*, int) {}
 #endif
 
 void netPathUpdate(const QString& host); // netpath.cpp
@@ -195,6 +197,7 @@ bool Session::dynresTick()
         if (qEnvironmentVariableIsSet("MOONLIGHT_LOCAL_CURSOR")) {
             cursorShareStart(m_Computer->activeAddress.address().toUtf8().constData());
         }
+        dynresChromeless(m_Window, qEnvironmentVariableIntValue("MOONLIGHT_CHROMELESS"));
         static bool watching;
         if (!watching) {
             watching = true;

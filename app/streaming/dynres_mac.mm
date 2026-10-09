@@ -205,3 +205,38 @@ void dynresOnPanelToggle(void (*toggled)())
         toggled();
     });
 }
+
+// Experiment (MOONLIGHT_CHROMELESS): the stream fills the whole window, title
+// bar strip included, and the traffic lights are hidden. It answers one
+// question before any hover bar is built: do clicks in the old title bar strip
+// reach the stream, or does macOS keep them for dragging the window?
+//   1  transparent title bar, content underneath, background dragging off
+//   2  the same, and the window cannot be moved at all
+// Nothing here survives a trip through native fullscreen: SDL rebuilds the
+// style mask on the way out.
+void dynresChromeless(SDL_Window* window, int mode)
+{
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (mode <= 0 || !SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_COCOA) {
+        return;
+    }
+
+    NSWindow* w = info.info.cocoa.window;
+    NSRect before = w.contentView.frame;
+    w.styleMask |= NSWindowStyleMaskFullSizeContentView;
+    w.titlebarAppearsTransparent = YES;
+    w.titleVisibility = NSWindowTitleHidden;
+    [w standardWindowButton:NSWindowCloseButton].hidden = YES;
+    [w standardWindowButton:NSWindowMiniaturizeButton].hidden = YES;
+    [w standardWindowButton:NSWindowZoomButton].hidden = YES;
+    w.movableByWindowBackground = NO;
+    if (mode >= 2) {
+        w.movable = NO;
+    }
+    NSRect after = w.contentView.frame;
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Chromeless %d: content view was %.0fx%.0f, is %.0fx%.0f in a %.0fx%.0f window",
+                mode, before.size.width, before.size.height, after.size.width, after.size.height,
+                w.frame.size.width, w.frame.size.height);
+}
