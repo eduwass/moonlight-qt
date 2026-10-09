@@ -446,6 +446,57 @@ static Diagnosis examine(NSDictionary* device)
 
 @end
 
+// ---- General
+
+@interface GeneralPane : NSView {
+    NSPopUpButton* warm;
+}
+@end
+
+@implementation GeneralPane
+- (BOOL)isFlipped { return YES; }
+- (void)changed:(id)sender
+{
+    [NSUserDefaults.standardUserDefaults setInteger:warm.selectedItem.tag forKey:@"WarmSeconds"];
+}
+- (instancetype)initWithFrame:(NSRect)frame
+{
+    self = [super initWithFrame:frame];
+    warm = [[[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO] autorelease];
+    NSArray* choices = @[@[@"End the stream", @0], @[@"Keep it warm for 15 minutes", @900], @[@"Keep it warm for an hour", @3600],
+                         @[@"Keep it warm for 2 hours", @7200], @[@"Keep it warm for 8 hours", @28800], @[@"Keep it warm until I end it", @-1]];
+    for (NSArray* choice in choices) {
+        [warm addItemWithTitle:choice[0]];
+        warm.lastItem.tag = [choice[1] integerValue];
+    }
+    [warm selectItemWithTag:[NSUserDefaults.standardUserDefaults integerForKey:@"WarmSeconds"]];
+    warm.target = self;
+    warm.action = @selector(changed:);
+    NSGridView* grid = [NSGridView gridViewWithViews:@[
+        @[caption(@"Closing a stream's window"), warm],
+        @[caption(@""), note(@"A warm stream goes on out of sight, so its window is back at once: Connect in the device window, a link, or the Dock. "
+                              "The device keeps sending picture all that time. End Stream in the device window, or ⌃⌥⇧Q in the stream, ends it for good.")],
+    ]];
+    grid.rowSpacing = 10;
+    grid.columnSpacing = 12;
+    [grid columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
+    grid.rowAlignment = NSGridRowAlignmentFirstBaseline;
+    grid.translatesAutoresizingMaskIntoConstraints = NO;
+    [self addSubview:grid];
+    [NSLayoutConstraint activateConstraints:@[
+        [grid.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:4],
+        [grid.trailingAnchor constraintLessThanOrEqualToAnchor:self.trailingAnchor constant:-4],
+        [grid.topAnchor constraintEqualToAnchor:self.topAnchor constant:6],
+    ]];
+    return self;
+}
+@end
+
+NSView* settingsGeneralPane(NSRect frame)
+{
+    return [[[GeneralPane alloc] initWithFrame:frame] autorelease];
+}
+
 NSView* settingsQualityPane(NSRect frame)
 {
     return [[[QualityPane alloc] initWithFrame:frame] autorelease];

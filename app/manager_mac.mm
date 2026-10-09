@@ -75,6 +75,42 @@ static void loadDevices()
     saveDevices();
 }
 
+// How a stream's process is told which device it is (MOONLIGHT_DEVICE), and
+// how it is found again: a warm stream may have been started by an earlier run
+// of this window, or by a link.
+static NSString* deviceId(NSString* name)
+{
+    return [name stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet] ?: @"";
+}
+
+static bool streamRuns(NSString* name)
+{
+    NSTask* task = [[[NSTask alloc] init] autorelease];
+    task.executableURL = [NSURL fileURLWithPath:@"/bin/ps"];
+    task.arguments = @[@"eww", @"-Ao", @"command"];
+    NSPipe* out = [NSPipe pipe];
+    task.standardOutput = out;
+    if (![task launchAndReturnError:nil]) {
+        return false;
+    }
+    NSData* data = [out.fileHandleForReading readDataToEndOfFile];
+    [task waitUntilExit];
+    NSString* all = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease] ?: @"";
+    NSString* mark = [NSString stringWithFormat:@"MOONLIGHT_DEVICE=%@", deviceId(name)];
+    for (NSString* line in [all componentsSeparatedByString:@"\n"]) {
+        if ([line containsString:@"Moonlight stream "] && ([line containsString:[mark stringByAppendingString:@" "]] || [line hasSuffix:mark])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void tellStream(NSString* name, NSString* what)
+{
+    [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.stream" object:deviceId(name)
+                                                                userInfo:@{@"do": what} deliverImmediately:YES];
+}
+
 // What a device answered when last asked.
 @interface DeviceStatus : NSObject {
 @public
@@ -111,7 +147,8 @@ static void loadDevices()
     NSMutableDictionary<NSString*, DeviceStatus*>* statuses; // by address
     NSMutableDictionary<NSString*, NSImage*>* pictures;       // by device name
     NSMutableDictionary<NSString*, NSDate*>* pictureTimes;
-    NSMutableDictionary<NSString*, NSRunningApplication*>* streams;
+    NSMutableSet<NSString*>* running; // the devices with a stream open or warm, as of the last look
+    NSButton* endStream;
     int shooting; // screenshots on their way
 }
 @end
@@ -193,7 +230,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     [cell addSubview:nameField];
 
     NSString* sub = [device[@"system"] isEqualToString:@"linux"] ? @"Linux" : @"macOS";
-    if ([streams[device[@"name"] ?: @""] isTerminated] == NO && streams[device[@"name"] ?: @""] != nil) {
+    if ([running containsObject:device[@"name"] ?: @""]) {
         sub = [sub stringByAppendingString:@" · streaming"];
     }
     NSTextField* subField = label(sub, 11, NSFontWeightRegular, NSColor.secondaryLabelColor);
@@ -240,8 +277,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     before.stringValue = device[@"before"] ?: @"";
 
     DeviceStatus* status = statuses[device[@"address"] ?: @""];
-    NSRunningApplication* stream = streams[deviceName];
-    bool streaming = stream != nil && !stream.terminated;
+    bool streaming = [running containsObject:deviceName];
+    endStream.hidden = !streaming;
     if (status == nil || !status->asked) {
         statusLine.stringValue = @"Checking…";
     }
@@ -308,8 +345,32 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 // ---- whether each device answers
 
+- (void)end:(id)sender
+{
+    NSString* deviceName = [self device][@"name"];
+    if (deviceName != nil) {
+        tellStream(deviceName, @"end");
+        [running removeObject:deviceName];
+        [table reloadData];
+        [self show];
+    }
+}
+
 - (void)ask
 {
+    // Which devices have a stream, seen or warm. (One ps for all of them.)
+    NSMutableSet* now = [NSMutableSet set];
+    for (NSDictionary* device in s_Devices) {
+        if (device[@"name"] != nil && streamRuns(device[@"name"])) {
+            [now addObject:device[@"name"]];
+        }
+    }
+    if (![now isEqualToSet:running]) {
+        [running setSet:now];
+        NSInteger selected = table.selectedRow;
+        [table reloadData];
+        [table selectRowIndexes:[NSIndexSet indexSetWithIndex:selected] byExtendingSelection:NO];
+    }
     for (NSDictionary* device in s_Devices) {
         NSString* at = device[@"address"];
         if (at.length == 0) {
@@ -452,7 +513,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
                                     completionHandler:^(NSRunningApplication* app, NSError* error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (app != nil && deviceName != nil) {
-                streams[deviceName] = app;
+                [running addObject:deviceName];
             }
             connect.enabled = YES;
             [table reloadData];
@@ -474,9 +535,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     if (device == nil || [device[@"address"] length] == 0) {
         return;
     }
-    NSRunningApplication* stream = streams[deviceName];
-    if (stream != nil && !stream.terminated) {
-        [stream activateWithOptions:0];
+    if (streamRuns(deviceName)) {
+        tellStream(deviceName, @"show");
         return;
     }
     connect.enabled = NO;
@@ -516,6 +576,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         }
         NSMutableDictionary* environment = [NSMutableDictionary dictionary];
         environment[@"MOONLIGHT_CHROME"] = linux ? @"linux" : @"1";
+        environment[@"MOONLIGHT_DEVICE"] = deviceId(deviceName);
         environment[@"MOONLIGHT_FPS_ABOVE"] = rule;
         environment[@"MOONLIGHT_WINDOW"] = [NSString stringWithFormat:@"%ldx%ld", (long)w, (long)h];
         if (fixed) environment[@"MOONLIGHT_FOLLOW"] = @"0";
@@ -639,7 +700,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     statuses = [[NSMutableDictionary alloc] init];
     pictures = [[NSMutableDictionary alloc] init];
     pictureTimes = [[NSMutableDictionary alloc] init];
-    streams = [[NSMutableDictionary alloc] init];
+    running = [[NSMutableSet alloc] init];
 
     window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 940, 700)
                                          styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
@@ -741,7 +802,10 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     names.orientation = NSUserInterfaceLayoutOrientationVertical;
     names.alignment = NSLayoutAttributeLeading;
     names.spacing = 2;
-    NSStackView* head = [NSStackView stackViewWithViews:@[names, connect]];
+    endStream = [NSButton buttonWithTitle:@"End Stream" target:self action:@selector(end:)];
+    endStream.controlSize = NSControlSizeLarge;
+    endStream.hidden = YES;
+    NSStackView* head = [NSStackView stackViewWithViews:@[names, endStream, connect]];
     head.distribution = NSStackViewDistributionFill;
     [names setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
@@ -847,6 +911,7 @@ void managerSetDeviceBitrate(NSString* name, long kbps)
 
 static bool s_OpenedByLink;
 static NSDate* s_StartedAt;
+static NSDate* s_LinkAt; // when the last link to a device came
 
 void managerStart()
 {
@@ -888,15 +953,22 @@ void managerOpenUrl(const char* url)
             [s_Manager->window orderOut:nil];
         }
         s_OpenedByLink = true;
+        [s_LinkAt release];
+        s_LinkAt = [[NSDate date] retain];
     }
 }
 
 void managerShow()
 {
-    // Not for the activation that comes with being started for a link.
-    if (s_OpenedByLink && -s_StartedAt.timeIntervalSinceNow < 4) {
-        return;
-    }
+    // Not for the activation that comes with a link to a device: that asks
+    // for the device's stream, not for this window. The link may arrive just
+    // after the activation, so wait a moment before deciding.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (s_LinkAt == nil || -s_LinkAt.timeIntervalSinceNow > 2) {
+            [s_Manager->window makeKeyAndOrderFront:nil];
+        }
+    });
+    return;
     [s_Manager->window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 }

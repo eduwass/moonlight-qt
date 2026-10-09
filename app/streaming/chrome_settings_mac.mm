@@ -218,12 +218,13 @@ static void symbol(NSString* name, NSRect box, uint32_t colour, CGFloat size)
 @end
 
 // doctor_mac.mm
+NSView* settingsGeneralPane(NSRect frame);
 NSView* settingsQualityPane(NSRect frame);
 NSView* settingsDoctorPane(NSRect frame);
 
-enum { PANE_QUALITY, PANE_KEYS, PANE_DOCTOR, PANE_COUNT };
-static NSString* const k_PaneNames[PANE_COUNT] = {@"Quality", @"Keys", @"Doctor"};
-static NSString* const k_PaneSymbols[PANE_COUNT] = {@"dial.medium", @"keyboard", @"stethoscope"};
+enum { PANE_GENERAL, PANE_QUALITY, PANE_KEYS, PANE_DOCTOR, PANE_COUNT };
+static NSString* const k_PaneNames[PANE_COUNT] = {@"General", @"Quality", @"Keys", @"Doctor"};
+static NSString* const k_PaneSymbols[PANE_COUNT] = {@"gearshape", @"dial.medium", @"keyboard", @"stethoscope"};
 
 @interface ChromeSettingsView : NSView {
 @public
@@ -345,6 +346,8 @@ void chromeSettingsOpen(const char* host)
             [view addSubview:recorder];
             [view->keyViews addObject:recorder];
         }
+        view->panes[PANE_GENERAL] = settingsGeneralPane(NSMakeRect(236, 52, 484, 540));
+        [view addSubview:view->panes[PANE_GENERAL]];
         view->panes[PANE_QUALITY] = settingsQualityPane(NSMakeRect(236, 52, 484, 540));
         view->panes[PANE_DOCTOR] = settingsDoctorPane(NSMakeRect(236, 52, 484, 540));
         [view addSubview:view->panes[PANE_QUALITY]];
@@ -356,7 +359,7 @@ void chromeSettingsOpen(const char* host)
         [restore setFrameOrigin:NSMakePoint(718 - restore.frame.size.width, 332)];
         [view addSubview:restore];
         [view->keyViews addObject:restore];
-        [view choose:PANE_QUALITY];
+        [view choose:PANE_GENERAL];
         window.contentView = view;
         [window center];
     }

@@ -734,6 +734,88 @@ static bool chromeTakes(int key, bool down, int sdlMods)
     return true;
 }
 
+// A warm stream: with "WarmSeconds" set (Settings > General), the red light
+// does not end the stream but puts its window out of sight, and the stream
+// goes on, so that the window is back at once when asked for: by this app
+// becoming active (the device window's Show Window, the Dock icon) or by the
+// "show" notification. After that many seconds out of sight it ends for good
+// (-1: never). Ctrl+Option+Shift+Q ends it at any time, as before.
+// The process says which device it is with MOONLIGHT_DEVICE, set by whoever started it.
+@interface ChromeWarm : NSObject {
+@public
+    NSWindow* window;
+    NSTimer* end;
+    id awake; // while out of sight: see closeAsked
+    bool hidden;
+}
+@end
+
+static ChromeWarm* s_Warm;
+
+@implementation ChromeWarm
+- (void)finish
+{
+    SDL_Event event;
+    event.type = SDL_QUIT;
+    event.quit.timestamp = SDL_GetTicks();
+    SDL_PushEvent(&event);
+}
+- (void)show
+{
+    [end invalidate];
+    end = nil;
+    if (awake != nil) {
+        [NSProcessInfo.processInfo endActivity:awake];
+        [awake release];
+        awake = nil;
+    }
+    if (hidden) {
+        hidden = false;
+        SDL_DisableScreenSaver(); // as Moonlight has it while its stream shows
+        [window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+    }
+}
+- (void)closeAsked:(id)sender
+{
+    NSInteger seconds = [NSUserDefaults.standardUserDefaults integerForKey:@"WarmSeconds"];
+    if (seconds == 0 || (window.styleMask & NSWindowStyleMaskFullScreen)) {
+        [self finish];
+        return;
+    }
+    hidden = true;
+    showBar(false);
+    [window orderOut:nil];
+    SDL_EnableScreenSaver(); // an unseen stream must not keep this Mac's screen awake
+    // Nor may macOS put the app to rest for having nothing on screen (App
+    // Nap): the stream stops answering the host, which drops it after half a
+    // minute. This says there is work going on, without holding the Mac awake.
+    awake = [[NSProcessInfo.processInfo beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
+                                                          reason:@"A stream kept warm out of sight"] retain];
+    [NSApp hide:nil];
+    if (seconds > 0) {
+        end = [NSTimer scheduledTimerWithTimeInterval:seconds target:self selector:@selector(finish) userInfo:nil repeats:NO];
+    }
+}
+- (void)becameActive:(NSNotification*)note
+{
+    [self show];
+}
+- (void)told:(NSNotification*)note
+{
+    const char* device = getenv("MOONLIGHT_DEVICE");
+    if (device == nullptr || ![note.object isEqual:@(device)]) {
+        return;
+    }
+    if ([note.userInfo[@"do"] isEqual:@"end"]) {
+        [self finish];
+    }
+    else {
+        [self show];
+    }
+}
+@end
+
 static ChromeButton* addButton(ChromeBar* bar, CGFloat x, NSString* symbol, int action)
 {
     ChromeButton* button = [[[ChromeButton alloc] initWithFrame:NSMakeRect(x, 4, 24, 18)] autorelease];
@@ -797,6 +879,18 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         [bar addSubview:light];
         s_Lights[i] = light;
     }
+    if (s_Warm == nil) {
+        s_Warm = [[ChromeWarm alloc] init];
+        [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(becameActive:) name:NSApplicationDidBecomeActiveNotification object:nil];
+        [NSDistributedNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(told:) name:@"dev.eduwass.moonlight-next.stream" object:nil
+                                                suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
+    }
+    [s_Warm->end invalidate];
+    s_Warm->end = nil;
+    s_Warm->hidden = false;
+    s_Warm->window = w;
+    s_Lights[0].target = s_Warm;
+    s_Lights[0].action = @selector(closeAsked:);
 
     [bar addSubview:[[[ChromeHandle alloc] initWithFrame:NSMakeRect(98, 4, 28, 18)] autorelease]];
     bar->link = addButton(bar, 134, @"bolt.fill", -1);
