@@ -282,7 +282,7 @@ static NSString* const k_PaneSymbols[PANE_COUNT] = {@"gearshape", @"dial.medium"
     [rgba(0x1F1E21FF) setFill];
     [[NSBezierPath bezierPathWithRoundedRect:NSMakeRect(18, 56, 36, 36) xRadius:9 yRadius:9] fill];
     symbol(@"moon.fill", NSMakeRect(18, 56, 36, 36), 0xECECECFF, 18);
-    [@"Moonlight" drawAtPoint:NSMakePoint(64, 58) withAttributes:text(13, NSFontWeightSemibold, 0xECECECFF)];
+    [(NSBundle.mainBundle.infoDictionary[@"CFBundleName"] ?: @"Moonlight") drawAtPoint:NSMakePoint(64, 58) withAttributes:text(13, NSFontWeightSemibold, 0xECECECFF)];
     [(host.length > 0 ? host : @"Settings") drawAtPoint:NSMakePoint(64, 76) withAttributes:text(11, NSFontWeightRegular, 0xA3A1A8FF)];
 
     for (int i = 0; i < PANE_COUNT; i++) {

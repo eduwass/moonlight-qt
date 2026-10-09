@@ -1,0 +1,55 @@
+---
+title: Troubleshooting
+description: What has gone wrong before, and what fixed it.
+---
+
+## "Failed to initialize video capture/encoding. Is a display connected and turned on?"
+
+The host's displays are asleep. Wake them before connecting; see [Hosts](/hosts) for a **Before connecting** command for each kind of machine.
+
+## The picture is black
+
+The host's screen is asleep or blanked. On a Mac, wake it as above. On Hyprland, turn the output on (DPMS); `pc-wake` from [Hosts](/hosts) does it.
+
+## The lock screen is all I get
+
+The host's session is locked. Type its password through the stream, or unlock it in the **Before connecting** command (on Linux, `loginctl unlock-sessions`).
+
+## Colours look washed out
+
+Turn on **Raw colours** for that device. macOS fits a stream's colours to your display; a desktop that was tuned by eye on a wide-gamut monitor then looks duller than on its own cable.
+
+## Two pointers
+
+**Instant pointer** is on for a host that cannot leave its cursor out of the picture. Turn it off for that device.
+
+## It is slower than it was
+
+Open the bar and rest on the connection. If it says Wi-Fi or Tailscale where you expected a cable, Moonlight has drifted to another address for the host: it remembers the address a host last reported for itself and tries that one first. Connecting from the device window pins the address each time. If the link is right and still slow, run [the doctor](/settings#doctor).
+
+## The picture is soft
+
+The stream's size does not match the window's pixels. Check that **Follow size** is on, or that a fixed size is what you meant. On a Linux host, check that its output has the stream's size (`hyprctl monitors`): a configuration reload resets a virtual output unless the watcher from [Hosts](/hosts) is running.
+
+## A warm stream is gone
+
+Its time ran out (Settings › General), the host ended the session, or your Mac slept.
+
+## The watching Mac fell asleep
+
+A Mac with its lid closed needs both a display and power to stay awake. If its monitor is switched off it sleeps, whatever is running.
+
+## Switches for the curious
+
+The device window sets these for you. Starting a stream by hand (`MoonlightNext.app/Contents/MacOS/Moonlight stream <address> Desktop ...`), they are environment variables:
+
+| Variable | Does |
+| --- | --- |
+| `MOONLIGHT_CHROME` | The window with the bar and no title bar. `linux` gives the Linux mark. |
+| `MOONLIGHT_WINDOW=WxH` | The window to open, in points. |
+| `MOONLIGHT_FOLLOW=0` | Start with Follow size off. |
+| `MOONLIGHT_PANEL_PIXELS` | Start with True Pixels on. |
+| `MOONLIGHT_RAW_COLOR` | Raw colours. |
+| `MOONLIGHT_LOCAL_CURSOR` | Instant pointer. |
+| `MOONLIGHT_FPS_ABOVE=pixels:above:below` | The frame rate by stream size. |
+| `MOONLIGHT_CLASSIC` | Moonlight's own screens instead of the device window. |

@@ -1,0 +1,55 @@
+---
+title: Links
+description: Open a machine, with the settings you want, from Raycast, a script or a bookmark.
+---
+
+MoonlightNext answers links that start with `moonlightnext://`.
+
+## The links
+
+| Link | Does |
+| --- | --- |
+| `moonlightnext://connect/<device>` | Opens that device's stream. If it has one already, warm or not, brings its window forward. |
+| `moonlightnext://show` | Opens the device window. |
+| `moonlightnext://settings` | Opens Settings. |
+
+`<device>` is the device's name as it is in the list, or its address. Case does not matter. Write a space as `%20`.
+
+A stream started by a link does not bring up the device window.
+
+## What a connect link can say
+
+Add these after a `?`, joined by `&`. They hold for that one stream; the device's own settings stay as they are.
+
+| Parameter | Example | Means |
+| --- | --- | --- |
+| `size` | `size=1600x900` | The window to open, in points. |
+| `fixed` | `fixed=3840x2160` | A fixed stream size in pixels, scaled to fit the window. `fixed=0` turns a device's fixed size off. |
+| `truepixels` | `truepixels=1` | True Pixels on (`1`) or off (`0`). |
+| `raw` | `raw=1` | Raw colours on or off. |
+| `pointer` | `pointer=1` | Instant pointer on or off. |
+| `bitrate` | `bitrate=20000` | In kbps. `0` for automatic. |
+| `fps` | `fps=30` | Frames a second. |
+
+## Examples
+
+```sh
+# The PC, as its settings say
+open "moonlightnext://connect/Omarchy%20PC"
+
+# The same machine in a small window, for a weak connection
+open "moonlightnext://connect/Omarchy%20PC?size=1280x720&bitrate=10000&fps=30"
+
+# A 4K picture scaled into whatever window is open
+open "moonlightnext://connect/MBP%2013?fixed=3840x2160"
+```
+
+A Raycast script command:
+
+```sh
+#!/bin/bash
+# @raycast.schemaVersion 1
+# @raycast.title Open Omarchy PC
+# @raycast.mode silent
+open "moonlightnext://connect/Omarchy%20PC"
+```

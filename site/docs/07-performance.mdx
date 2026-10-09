@@ -1,0 +1,51 @@
+---
+title: Performance
+description: What was measured, on what, and what the numbers mean for choosing a size and a frame rate.
+---
+
+All numbers are from one desk: a MacBook Pro (M1 Max) watching, on a 5120 × 2160 monitor at 72 Hz.
+
+## Hand to eye
+
+The time from a pointer movement on the watching Mac to the change showing on its screen, median of 80 samples, at 60 frames a second unless said.
+
+### A 13" MacBook Pro (M1), over Thunderbolt
+
+| Stream | Hand to eye |
+| --- | --- |
+| 1920 × 1080 | 33–39 ms |
+| 2560 × 1440 | 37–38 ms |
+| 3400 × 1912 | 43–47 ms |
+| 3840 × 2160 | 50–52 ms |
+| 5120 × 2160, at 40 | 57–63 ms |
+
+Its encoder takes 14 ms a frame at 3400 × 1912 and keeps up with 60 frames a second up to 3840 × 2160. Above that it gets 40.
+
+### A PC with a GTX 1080, over Wi-Fi
+
+| Stream | Hand to eye | PC time per frame |
+| --- | --- | --- |
+| 1920 × 1080 | 37.5 ms | 4.5 ms |
+| 2560 × 1440 | 37 ms | 6.6 ms |
+| 3400 × 1912 | 41 ms | 9.2 ms |
+| 3840 × 2160 | 46 ms | 11.0 ms |
+| 5120 × 2160 | 51.5 ms | 14.2 ms |
+| 6400 × 2700, at 40 | 68 ms | 20.5 ms |
+
+It holds 60 frames a second up to 5120 × 2160. At 6400 × 2700 a frame takes it 19 ms at best: asked for 60 it delivers 50 with frames backing up, so it gets 50 there.
+
+Over Tailscale instead of the home network, the same stream is about 4 ms slower.
+
+## Where the time goes
+
+At 3400 × 1912 from the PC, of 41 ms: 9 ms is the PC capturing and encoding, 4–6 ms the network, 3.5 ms decoding. The rest, about 23 ms, is waiting: for the host's next capture, for the next frame slot, and for the display.
+
+## What to choose
+
+- **A window, not fullscreen**, is the fastest way to work: fewer pixels, less time.
+- **True Pixels** on a scaled monitor: the same sharpness on the glass for two thirds of the pixels.
+- **A cable** where you can. Wi-Fi adds 4–6 ms when it is good and far more when it is not; [the doctor](/settings#doctor) tells you which.
+
+## Reliability
+
+On the builds these numbers come from: 30 of 30 window resizes on each host, 25 of 25 cold starts, an hour at 3840 × 2160 with a constantly changing picture with flat memory at both ends, and the app's memory flat across 20 resizes (117 MB).

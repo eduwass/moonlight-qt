@@ -1,0 +1,32 @@
+---
+title: Install
+description: Get the app onto your Mac and paired with a machine running Sunshine.
+---
+
+## What you need
+
+- A Mac with Apple silicon, macOS 13 or later, to watch from.
+- A machine to watch, running [Sunshine](https://app.lizardbyte.dev/Sunshine/). A Mac or a Linux PC both work; see [Hosts](/hosts) for what makes each one behave well.
+- A network between them. A cable is best, Wi-Fi works, [Tailscale](https://tailscale.com) works from anywhere.
+
+## Install the app
+
+Open `MoonlightNext.dmg` and drag **MoonlightNext** to Applications.
+
+The app is not signed with an Apple developer certificate. The first time, right-click it in Applications and choose **Open**, then **Open** again.
+
+macOS asks once whether MoonlightNext may find devices on your local network. Allow it: without that, it cannot reach a machine on the same network.
+
+## Pair with a machine
+
+MoonlightNext uses Moonlight's own pairing, and shares its settings with Moonlight if you have that installed. Machines you have already paired show up in the list on first start.
+
+To pair a new one:
+
+1. In the device window, press **+** and give the device a name and its address.
+2. Open the **…** menu at the bottom of the list and choose **Pair This Device…**. A window shows a four-digit PIN.
+3. Type that PIN into Sunshine's web page on the other machine (`https://<its address>:47990`, under **PIN**).
+
+## Build it yourself
+
+The source is the `eduwass` branch of [eduwass/moonlight-qt](https://github.com/eduwass/moonlight-qt). It builds like Moonlight does on macOS (Qt 6, the usual Homebrew libraries). Everything the fork adds is in files of its own, named in each file's first lines.

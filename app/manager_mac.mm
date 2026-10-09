@@ -706,7 +706,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
                                          styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
                                                    NSWindowStyleMaskResizable | NSWindowStyleMaskFullSizeContentView
                                            backing:NSBackingStoreBuffered defer:NO];
-    window.title = @"Moonlight";
+    window.title = NSBundle.mainBundle.infoDictionary[@"CFBundleName"] ?: @"Moonlight";
     window.titlebarAppearsTransparent = YES;
     window.releasedWhenClosed = NO;
     window.delegate = self;

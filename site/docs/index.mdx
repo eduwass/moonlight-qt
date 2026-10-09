@@ -1,0 +1,38 @@
+---
+title: MoonlightNext
+description: Another computer's desktop in a window on your Mac, sharp at any window size, in about 40 ms from hand to eye.
+---
+
+MoonlightNext shows another computer's desktop in a window on your Mac. It is a fork of [Moonlight](https://moonlight-stream.org) and talks to [Sunshine](https://app.lizardbyte.dev/Sunshine/) on the other machine, but it is built for working on that machine, not for playing games on it.
+
+![The device window: the machines to connect to, and the one selected](./images/devices.png)
+
+## What it does that Moonlight does not
+
+- **The picture is always one stream pixel per screen pixel.** Resize the window and the stream restarts in place at the new size, in about four seconds, behind a still of the last frame.
+- **A window of its own.** No title bar over the picture. A small tab at the top centre drops a bar with the connection, the switches and the traffic lights.
+- **A list of your machines.** Each with a picture of what is on its screen, whether it answers, and how it is streamed.
+- **Several streams at once**, each in its own window.
+- **Links.** `moonlightnext://connect/My%20PC` opens a machine from Raycast, a script or a bookmark.
+- **A doctor** that looks at the way to a machine and says what the link can carry.
+- **Warm streams.** Close a window and have it back in under half a second.
+
+## How fast it is
+
+Measured from a pointer movement on the Mac to the change on its screen, at 60 frames a second:
+
+| Stream | Host | Link | Hand to eye |
+| --- | --- | --- | --- |
+| 2560 × 1440 | 13" MacBook Pro (M1) | Thunderbolt | 37–38 ms |
+| 3400 × 1912 | 13" MacBook Pro (M1) | Thunderbolt | 43–47 ms |
+| 2560 × 1440 | PC, GTX 1080 | Wi-Fi | 37 ms |
+| 3400 × 1912 | PC, GTX 1080 | Wi-Fi | 41 ms |
+| 5120 × 2160 | PC, GTX 1080 | Wi-Fi | 51.5 ms |
+
+More in [Performance](/performance).
+
+## Where to start
+
+1. [Install](/install) the app and pair it with a machine running Sunshine.
+2. Meet the [device window](/devices).
+3. Learn the [stream window](/stream-window) and its bar.

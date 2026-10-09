@@ -1,0 +1,35 @@
+---
+title: Hosts
+description: What makes a Mac and a Linux PC behave well as the machine being watched.
+---
+
+Any machine running Sunshine can be watched. The two below are the ones this was built and measured on, and what each needed. The scripts named here live in [eduwass/dotfiles](https://github.com/eduwass/dotfiles) under `infra/kvm`.
+
+## A Mac
+
+Sunshine on macOS needs three things to feel like a local desktop.
+
+- **A display that follows the window.** `vdisplay` (in `mac-host/`) makes a virtual display and sets it to whatever size the stream asks for, at 2x, so a resized window gets a sharp picture and not a scaled one.
+- **A build that keeps up.** Sunshine's ScreenCaptureKit capture, with a small patch (`mac-host/sunshine-local.patch`): the encoder's "real time" flag off (14 ms a frame at 3400 × 1912 instead of 17.5), and capture paced to the stream's rate.
+- **Awake displays.** A Mac's displays sleep after a few idle minutes, and Sunshine then refuses a stream: "Failed to initialize video capture/encoding. Is a display connected and turned on?" Wake them first. As the device's **Before connecting** command:
+
+```sh
+ssh my-mac 'caffeinate -u -t 30 >/dev/null 2>&1 & sleep 1'
+```
+
+For the **instant pointer**, the host runs `cursor-share` (in `mac-host/`), which sends the cursor's shape to your Mac and tells Sunshine to leave its own cursor out of the picture.
+
+`mac-host/doctor.sh` checks all of this from another machine.
+
+## A Linux PC (Hyprland)
+
+- **A display when there is no monitor.** Booted headless, Hyprland has no output and Sunshine finds no encoder. `pc/sunshine-virtual-display` makes a virtual output when Sunshine starts.
+- **A display that follows the window.** The same script, as the prep command of Sunshine's Desktop app, sets that output to the size the stream asks for.
+- **A display that stays that size.** Every time Hyprland rereads its configuration (a theme change, a scaling change, an edit) the virtual output falls back to 1080p and the stream would be stretched from it. `pc/sunshine-virtual-display-watch.service` puts the stream's size back, and keeps a scale you chose on the PC.
+- **Awake and unlocked.** A blanked or locked PC streams black or its lock screen. `mac/pc-wake.sh`, as the **Before connecting** command, turns the output on, unlocks the session, and prints the PC's address on the home network when your Mac can reach it there.
+
+The **instant pointer** does not work on Hyprland: it hands out a cursor's picture only when an application draws its own, not for the usual themed cursors. The PC's own cursor stays in the picture, one round trip behind your hand.
+
+With an NVIDIA card stuck on an older driver, check that your Sunshine build's encoder still matches it (a GTX 1080 on driver 580 needs Sunshine 2026.516).
+
+`pc/doctor.sh` checks all of this from another machine.
