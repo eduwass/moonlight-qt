@@ -260,12 +260,14 @@ void dynresRawColor(SDL_Window* window)
 // weakly. dynresFreeDroppedViews, called first thing in a later turn of the
 // streaming loop, when that turn's autorelease pool (session.h) is still
 // empty, looks at each: one that is still alive can only be held by SDL, and
-// gets the release SDL forgot. Once SDL releases its views itself they are
-// gone by then, and nothing is done.
+// gets the release SDL forgot.
+// ponytail: "still alive, so SDL holds it" is what was measured with this SDL
+// (3.4), not something the runtime guarantees. When SDL starts releasing its
+// views (the TODO above), check that they are gone by then and drop the
+// second release if anything else can still hold one.
 #import <objc/runtime.h>
 extern "C" id objc_storeWeak(id* location, id object);
 extern "C" id objc_loadWeakRetained(id* location);
-extern "C" void objc_destroyWeak(id* location);
 
 static id s_Dropped[32];
 static int s_DroppedCount;
@@ -274,7 +276,7 @@ void dynresFreeDroppedViews()
 {
     for (int i = 0; i < s_DroppedCount; i++) {
         id view = objc_loadWeakRetained(&s_Dropped[i]);
-        objc_destroyWeak(&s_Dropped[i]);
+        objc_storeWeak(&s_Dropped[i], nil); // emptied, not destroyed: the slot is used again
         if (view != nil) {
             [view release]; // ours, from the line above
             [view release]; // SDL's
