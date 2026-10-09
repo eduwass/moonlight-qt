@@ -41,16 +41,16 @@ struct ChromeState {
 void chromeStart(SDL_Window* window, void (*action)(int));
 void chromeUpdate(const ChromeState* state);
 bool chromeShown();
-// A key was pressed or released; chord says Ctrl, Option and Shift are all held.
+// A key was pressed or released, with SDL's key code and modifier state.
 // True if the chrome took it, and it must not go to the remote machine.
-bool chromeKey(int key, bool down, bool chord);
+bool chromeKey(int key, bool down, int mods);
 void chromeRaise();          // something was put on top of the window's content; go back above it
 void chromeLeftFullscreen(); // the window is back from fullscreen and has its style again
 #else
 static inline void chromeStart(SDL_Window*, void (*)(int)) {}
 static inline void chromeUpdate(const ChromeState*) {}
 static inline bool chromeShown() { return false; }
-static inline bool chromeKey(int, bool, bool) { return false; }
+static inline bool chromeKey(int, bool, int) { return false; }
 static inline void chromeRaise() {}
 static inline void chromeLeftFullscreen() {}
 #endif

@@ -12,6 +12,7 @@
 // moves it instead.
 
 #include "chrome.h"
+#include "chrome_keys.h"
 
 #include "SDL_compat.h"
 #include <SDL_syswm.h>
@@ -21,7 +22,7 @@
 #include <initializer_list>
 #include <vector>
 
-#define BAR_WIDTH 289
+#define BAR_WIDTH 330
 #define BAR_HEIGHT 26
 #define TAB_WIDTH 56
 #define TAB_HEIGHT 10
@@ -156,7 +157,7 @@ static void drawMark(int verdict, NSRect box)
 // One 24 x 18 button of the bar: a switch, or the connection.
 @interface ChromeButton : NSView {
 @public
-    int action; // what a click does, or -1 for the connection, which only informs
+    int action; // what a click does; -1 for the connection, which only informs; -2 for the gear
     bool on, busy, hovered;
     int mark;
     NSString* symbol;
@@ -184,7 +185,10 @@ static void showTip(ChromeButton* button);
 - (BOOL)mouseDownCanMoveWindow { return NO; }
 - (void)mouseDown:(NSEvent*)event
 {
-    if (action >= 0 && !busy && s_Action != nullptr) {
+    if (action == -2) {
+        chromeSettingsOpen(s_State.host);
+    }
+    else if (action >= 0 && !busy && s_Action != nullptr) {
         s_Action(action);
     }
 }
@@ -275,6 +279,7 @@ static void showTip(ChromeButton* button);
     ChromeButton* truePixels;
     ChromeButton* follow;
     ChromeButton* fullscreen;
+    ChromeButton* gear;
     bool inside;
 }
 @end
@@ -355,10 +360,11 @@ static void showTip(ChromeButton* button);
     [rgba(0xFFFFFF24) setFill];
     NSRectFillUsingOperation(NSMakeRect(73, 6, 1, 14), NSCompositingOperationSourceOver);
     NSRectFillUsingOperation(NSMakeRect(166, 6, 1, 14), NSCompositingOperationSourceOver);
+    NSRectFillUsingOperation(NSMakeRect(291, 6, 1, 14), NSCompositingOperationSourceOver);
 
     // The keyboard's ring: white, set off from the control by a gap in the bar's colour.
     if (s_Focus >= 0) {
-        static const CGFloat lefts[] = {134, 175, 203, 231, 259};
+        static const CGFloat lefts[] = {134, 175, 203, 231, 259, 300};
         NSBezierPath* ring = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(NSMakeRect(lefts[s_Focus], 4, 24, 18), -2.25, -2.25)
                                                              xRadius:8 yRadius:8];
         ring.lineWidth = 1.5;
@@ -430,9 +436,9 @@ static void showTip(ChromeButton* button);
 }
 @end
 
-static NSString* shortcut(char key)
+static NSString* shortcut(int which)
 {
-    return [NSString stringWithFormat:@"⌃⌥⇧%c from anywhere", key];
+    return [NSString stringWithFormat:@"%@ from anywhere", chromeBindingText(which)];
 }
 
 static void switchTip(std::vector<TipLine>& lines, NSString* name, NSString* state, NSString* keys)
@@ -452,25 +458,29 @@ static void fillTip(ChromeButton* button, std::vector<TipLine>& lines)
     if (button == s_Bar->stats) {
         switchTip(lines, @"Stats",
                   keyboard ? (s.stats ? @"On. Space turns it off." : @"Off. Space turns it on.")
-                  : s.stats ? @"On. The stream's numbers are shown over the picture." : @"Off.", shortcut('S'));
+                  : s.stats ? @"On. The stream's numbers are shown over the picture." : @"Off.", shortcut(KEY_STATS));
     }
     else if (button == s_Bar->truePixels) {
         switchTip(lines, @"True Pixels",
                   s.busy ? @"The stream restarts at the new size and the picture returns in a moment."
                   : keyboard ? (s.truePixels ? @"On. Space turns it off." : @"Off. Space turns it on.")
                   : s.truePixels ? @"On. The stream has your monitor's real resolution: faster, and all the glass can show."
-                  : @"Off. Full 2x Retina: more than the monitor can show, and slower.", shortcut('T'));
+                  : @"Off. Full 2x Retina: more than the monitor can show, and slower.", shortcut(KEY_TRUE_PIXELS));
     }
     else if (button == s_Bar->follow) {
         switchTip(lines, @"Follow size",
                   keyboard ? (s.followSize ? @"On. Space turns it off." : @"Off. Space turns it on.")
                   : s.followSize ? @"On. The stream restarts at the window's size when you resize it."
-                  : @"Off. The stream keeps its size and is scaled to the window.", shortcut('F'));
+                  : @"Off. The stream keeps its size and is scaled to the window.", shortcut(KEY_FOLLOW));
     }
     else if (button == s_Bar->fullscreen) {
         switchTip(lines, @"Fullscreen",
                   keyboard ? (s.fullscreen ? @"On. Space turns it off." : @"Off. Space turns it on.")
-                  : s.fullscreen ? @"On." : @"Off.", shortcut('X'));
+                  : s.fullscreen ? @"On." : @"Off.", shortcut(KEY_FULLSCREEN));
+    }
+    else if (button == s_Bar->gear) {
+        lines.push_back({@"Settings", nil, nil, NSFontWeightSemibold, 0xF2F2F4FF, 0, false, 0});
+        lines.push_back({@"Shortcuts", nil, nil, NSFontWeightRegular, 0xA0A0A8FF, 0, false, 1});
     }
     else {
         static NSString* const kinds[] = {@"Thunderbolt", @"Ethernet", @"Wi-Fi", @"Tailscale", @"Network"};
@@ -570,7 +580,7 @@ bool chromeShown()
 
 static ChromeButton* focused()
 {
-    ChromeButton* buttons[] = {s_Bar->link, s_Bar->stats, s_Bar->truePixels, s_Bar->follow, s_Bar->fullscreen};
+    ChromeButton* buttons[] = {s_Bar->link, s_Bar->stats, s_Bar->truePixels, s_Bar->follow, s_Bar->fullscreen, s_Bar->gear};
     return s_Focus >= 0 ? buttons[s_Focus] : nil;
 }
 
@@ -592,23 +602,36 @@ static void setFocus(int focus)
     }
 }
 
-bool chromeKey(int key, bool down, bool chord)
+bool chromeKey(int key, bool down, int sdlMods)
 {
     if (s_Bar == nil) {
         return false;
     }
 
-    if (chord && (key == SDLK_b || key == SDLK_i || key == SDLK_t || key == SDLK_f)) {
-        if (down) {
-            if (key == SDLK_b) {
-                setFocus(s_Focus >= 0 ? -1 : 1); // again closes it
-            }
-            else if (key == SDLK_i) {
-                setFocus(s_Focus == 0 ? -1 : 0);
-            }
-            else if (s_Action != nullptr) {
-                s_Action(key == SDLK_t ? CHROME_TRUE_PIXELS : CHROME_FOLLOW);
-            }
+    // A key whose press was ours: its release is ours too.
+    static int taken;
+    if (!down && key == taken) {
+        taken = 0;
+        return true;
+    }
+
+    int mods = (sdlMods & KMOD_CTRL ? MOD_CTRL : 0) | (sdlMods & KMOD_ALT ? MOD_ALT : 0) |
+               (sdlMods & KMOD_SHIFT ? MOD_SHIFT : 0) | (sdlMods & KMOD_GUI ? MOD_CMD : 0);
+    for (int which = 0; down && which < KEY_COUNT; which++) {
+        ChromeBinding binding = chromeBinding(which);
+        if (binding.key != key || binding.mods != mods) {
+            continue;
+        }
+        taken = key;
+        if (which == KEY_BAR) {
+            setFocus(s_Focus >= 0 ? -1 : 1); // again closes it
+        }
+        else if (which == KEY_INFO) {
+            setFocus(s_Focus == 0 ? -1 : 0);
+        }
+        else if (s_Action != nullptr) {
+            static const int actions[] = {0, 0, CHROME_STATS, CHROME_TRUE_PIXELS, CHROME_FOLLOW, CHROME_FULLSCREEN};
+            s_Action(actions[which]);
         }
         return true;
     }
@@ -625,11 +648,15 @@ bool chromeKey(int key, bool down, bool chord)
     }
     if (down) {
         if (key == SDLK_LEFT || key == SDLK_RIGHT) {
-            setFocus((s_Focus + (key == SDLK_LEFT ? 4 : 1)) % 5);
+            setFocus((s_Focus + (key == SDLK_LEFT ? 5 : 1)) % 6);
         }
         else if (key == SDLK_SPACE || key == SDLK_RETURN) {
             ChromeButton* button = focused();
-            if (button->action >= 0 && !button->busy && s_Action != nullptr) {
+            if (button->action == -2) {
+                setFocus(-1);
+                chromeSettingsOpen(s_State.host);
+            }
+            else if (button->action >= 0 && !button->busy && s_Action != nullptr) {
                 s_Action(button->action);
             }
         }
@@ -707,6 +734,7 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     bar->truePixels = addButton(bar, 203, @"square.grid.2x2.fill", CHROME_TRUE_PIXELS);
     bar->follow = addButton(bar, 231, @"arrow.up.right.square", CHROME_FOLLOW);
     bar->fullscreen = addButton(bar, 259, @"arrow.down.left.and.arrow.up.right", CHROME_FULLSCREEN);
+    bar->gear = addButton(bar, 300, @"gearshape.fill", -2);
     s_Bar = bar;
 
     ChromeTip* tip = [[ChromeTip alloc] initWithFrame:NSMakeRect(0, 0, TIP_WIDTH, 60)];
@@ -778,7 +806,7 @@ void chromeUpdate(const ChromeState* state)
     bar->follow->on = state->followSize;
     bar->follow->busy = state->busy;
     bar->fullscreen->on = state->fullscreen;
-    for (ChromeButton* button : {bar->link, bar->stats, bar->truePixels, bar->follow, bar->fullscreen}) {
+    for (ChromeButton* button : {bar->link, bar->stats, bar->truePixels, bar->follow, bar->fullscreen, bar->gear}) {
         button.needsDisplay = YES;
     }
     if (s_TipFor != nil) {
