@@ -1964,6 +1964,8 @@ void Session::exec()
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
     for (;;) {
+        // Fork: this loop has no autorelease pool of its own on macOS, see session.h
+        DynresLoopPool loopPool;
         if (!dynresTick()) goto DispatchDeferredCleanup; // dynres.cpp
 #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
         // SDL 2.0.18 has a proper wait event implementation that uses platform

@@ -247,6 +247,70 @@ void dynresRawColor(SDL_Window* window)
     }
 }
 
+// SDL 3 makes a view for every Vulkan surface and never lets go of it (its
+// Cocoa_Vulkan_DestroySurface says "TODO: Add CFBridgingRelease(metalview)
+// here perhaps?"). Moonlight makes a surface per renderer, and a restart in
+// place makes a renderer, so each one left a view behind with its layer and
+// its drawables: 28 MB a restart, measured (130 MB at the start, 689 MB twenty
+// restarts later; with this, 118 MB).
+//
+// In two steps. dynresDropStaleViews, called while the stream is settled (so
+// no renderer is in the making whose view could be taken for an old one),
+// takes every such view but the newest out of the window and remembers it
+// weakly. dynresFreeDroppedViews, called first thing in a later turn of the
+// streaming loop, when that turn's autorelease pool (session.h) is still
+// empty, looks at each: one that is still alive can only be held by SDL, and
+// gets the release SDL forgot. Once SDL releases its views itself they are
+// gone by then, and nothing is done.
+#import <objc/runtime.h>
+extern "C" id objc_storeWeak(id* location, id object);
+extern "C" id objc_loadWeakRetained(id* location);
+extern "C" void objc_destroyWeak(id* location);
+
+static id s_Dropped[32];
+static int s_DroppedCount;
+
+void dynresFreeDroppedViews()
+{
+    for (int i = 0; i < s_DroppedCount; i++) {
+        id view = objc_loadWeakRetained(&s_Dropped[i]);
+        objc_destroyWeak(&s_Dropped[i]);
+        if (view != nil) {
+            [view release]; // ours, from the line above
+            [view release]; // SDL's
+        }
+    }
+    s_DroppedCount = 0;
+}
+
+void dynresDropStaleViews(SDL_Window* window)
+{
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (s_DroppedCount != 0 || !SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_COCOA) {
+        return;
+    }
+    @autoreleasepool {
+        NSMutableArray<NSView*>* views = [NSMutableArray array];
+        for (NSView* view in info.info.cocoa.window.contentView.subviews) {
+            if ([view.layer isKindOfClass:[CAMetalLayer class]] && [NSStringFromClass(view.class) hasPrefix:@"SDL"]) {
+                [views addObject:view];
+            }
+        }
+        if (views.count < 2) {
+            return;
+        }
+        [views removeLastObject];
+        for (NSView* view in views) {
+            if (s_DroppedCount < 32) {
+                objc_storeWeak(&s_Dropped[s_DroppedCount++], view);
+                [view removeFromSuperview];
+            }
+        }
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Dropped %d views of earlier renderers", s_DroppedCount);
+    }
+}
+
 // Experiment (MOONLIGHT_CHROMELESS): the stream fills the whole window, title
 // bar strip included, and the traffic lights are hidden. It answers one
 // question before any hover bar is built: do clicks in the old title bar strip

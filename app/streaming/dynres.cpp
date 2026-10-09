@@ -53,6 +53,8 @@ double dynresPanelScale(SDL_Window* window);
 void dynresOnPanelToggle(void (*toggled)());
 void dynresChromeless(SDL_Window* window, int mode);
 void dynresRawColor(SDL_Window* window);
+void dynresDropStaleViews(SDL_Window* window);
+void dynresFreeDroppedViews();
 #else
 static void dynresBusy(SDL_Window*, bool) {}
 static void sysKeysSessionStarted() {}
@@ -61,6 +63,8 @@ static double dynresPanelScale(SDL_Window*) { return 1; }
 static void dynresOnPanelToggle(void (*)()) {}
 static void dynresChromeless(SDL_Window*, int) {}
 static void dynresRawColor(SDL_Window*) {}
+static void dynresDropStaleViews(SDL_Window*) {}
+static void dynresFreeDroppedViews() {}
 #endif
 
 void netPathUpdate(const QString& host); // netpath.cpp
@@ -246,6 +250,7 @@ static void judgeLink(ChromeState& state, Uint32 now)
 // Returns false if the stream could not be restarted and the session must end.
 bool Session::dynresTick()
 {
+    dynresFreeDroppedViews(); // first, while this turn's pool is empty: see dynres_mac.mm
     Uint32 now = SDL_GetTicks();
 
     // MOONLIGHT_RAW_COLOR, see dynres_mac.mm. Kept up, because every new
@@ -373,6 +378,14 @@ bool Session::dynresTick()
     if (m_VideoDecoder == nullptr) {
         s_SeenWidth = s_SeenHeight = 0;
         return true;
+    }
+
+    // With the stream settled, the views that earlier renderers left in the
+    // window can go (see dynres_mac.mm): 28 MB each, one per restart.
+    static Uint32 sweptAt;
+    if (s_Cover == COVER_OFF && !s_Await && now - sweptAt >= 2000 && !SDL_HasEvent(SDL_RENDER_DEVICE_RESET)) {
+        sweptAt = now;
+        dynresDropStaleViews(m_Window);
     }
 
     if (s_Await) {

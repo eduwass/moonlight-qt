@@ -89,6 +89,23 @@ public:
     }
 };
 
+// Fork (eduwass/moonlight-qt): the streaming loop runs for the whole session
+// inside one turn of Qt's loop, so on macOS nothing drains the autorelease
+// pool until the stream ends. What AppKit hands out in passing then lives that
+// long, and keeps its objects alive: each renderer's view stayed, with its
+// layer and drawables, 28 MB for every restart in place. One of these per turn
+// of the loop gives it a pool of its own.
+#ifdef __APPLE__
+extern "C" void* objc_autoreleasePoolPush(void);
+extern "C" void objc_autoreleasePoolPop(void* pool);
+struct DynresLoopPool {
+    void* pool = objc_autoreleasePoolPush();
+    ~DynresLoopPool() { objc_autoreleasePoolPop(pool); }
+};
+#else
+struct DynresLoopPool {};
+#endif
+
 class Session : public QObject
 {
     Q_OBJECT

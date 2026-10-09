@@ -672,7 +672,10 @@ bool chromeKey(int key, bool down, int sdlMods)
     if (s_KeysRemote.count(key) && s_Focus >= 0) {
         return true; // held since before the bar took the keyboard, and repeating
     }
-    bool ours = chromeTakes(key, down, sdlMods);
+    bool ours;
+    @autoreleasepool { // called from Moonlight's loop, which has none
+        ours = chromeTakes(key, down, sdlMods);
+    }
     (ours ? s_KeysOurs : s_KeysRemote).insert(key);
     return ours;
 }
