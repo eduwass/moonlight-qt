@@ -414,6 +414,7 @@ macx {
         streaming/cursorshare_mac.mm \
         streaming/chrome_mac.mm \
         streaming/chrome_settings_mac.mm \
+        manager_mac.mm \
         streaming/syskeys_mac.mm \
         streaming/video/ffmpeg-renderers/vt_base.mm \
         streaming/video/ffmpeg-renderers/vt_avsamplelayer.mm \

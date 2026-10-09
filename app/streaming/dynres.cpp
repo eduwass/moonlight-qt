@@ -265,6 +265,17 @@ bool Session::dynresTick()
     if (SDL_GetWindowID(m_Window) != s_WindowId) {
         // Whatever the last session left behind (it may have ended mid-restart).
         s_WindowId = SDL_GetWindowID(m_Window);
+        // MOONLIGHT_WINDOW=WxH: the window to open, in points (the app's own
+        // window asks for it; Moonlight would open one a little smaller than
+        // the stream and the first thing to happen would be a restart).
+        {
+            const QStringList size = qEnvironmentVariable("MOONLIGHT_WINDOW").split('x');
+            if (size.size() == 2 && size[0].toInt() >= 320 && size[1].toInt() >= 200 &&
+                    !(SDL_GetWindowFlags(m_Window) & SDL_WINDOW_FULLSCREEN)) {
+                SDL_SetWindowSize(m_Window, size[0].toInt(), size[1].toInt());
+                SDL_SetWindowPosition(m_Window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+            }
+        }
         dynresBusy(m_Window, false);
         s_Cover = COVER_OFF;
         s_SeenWidth = s_SeenHeight = 0;

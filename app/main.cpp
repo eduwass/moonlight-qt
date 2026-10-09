@@ -1,3 +1,4 @@
+#include "manager.h"
 #include <QGuiApplication>
 #include <QStyleHints>
 #include <QQmlApplicationEngine>
@@ -989,6 +990,15 @@ int main(int argc, char *argv[])
 
     switch (commandLineParserResult) {
     case GlobalCommandLineParser::NormalStartRequested:
+#ifdef Q_OS_DARWIN
+        // Fork: started by itself the app opens its own window (manager_mac.mm).
+        // MOONLIGHT_CLASSIC=1 gives Moonlight's own screens, as before.
+        if (!qEnvironmentVariableIsSet("MOONLIGHT_CLASSIC")) {
+            managerStart();
+            hasGUI = false;
+            break;
+        }
+#endif
         initialView = "qrc:/gui/PcView.qml";
         break;
     case GlobalCommandLineParser::StreamRequested:
