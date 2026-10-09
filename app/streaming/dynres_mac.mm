@@ -215,8 +215,8 @@ void dynresOnPanelToggle(void (*toggled)())
 // are, which is what the host's own cable to this monitor would carry. macOS
 // otherwise fits them to the display, and a desktop that was tuned by eye on a
 // wide-gamut monitor then looks washed out next to its usual self. Done by
-// telling the layer its picture is already in the display's colours.
-// ponytail: the main display's colours, wherever the window is.
+// telling the layer its picture is already in the colours of the screen the
+// window is on; asked again on every tick, so it follows the window to another.
 static void rawColorIn(NSView* view, CGColorSpaceRef display)
 {
     if ([view.layer isKindOfClass:[CAMetalLayer class]]) {
@@ -232,11 +232,15 @@ static void rawColorIn(NSView* view, CGColorSpaceRef display)
 
 void dynresRawColor(SDL_Window* window)
 {
-    static CGColorSpaceRef display = CGDisplayCopyColorSpace(CGMainDisplayID());
     SDL_SysWMinfo info;
     SDL_VERSION(&info.version);
-    if (display != nullptr && SDL_GetWindowWMInfo(window, &info) && info.subsystem == SDL_SYSWM_COCOA) {
-        rawColorIn(info.info.cocoa.window.contentView, display);
+    if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_COCOA) {
+        return;
+    }
+    NSWindow* w = info.info.cocoa.window;
+    CGColorSpaceRef display = w.screen.colorSpace.CGColorSpace;
+    if (display != nullptr) {
+        rawColorIn(w.contentView, display);
     }
 }
 
