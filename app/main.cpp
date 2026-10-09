@@ -1,6 +1,7 @@
 #include "manager.h"
 #include <QGuiApplication>
 #include <QStyleHints>
+#include <QFileOpenEvent>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QIcon>
@@ -417,6 +418,26 @@ void configureSignalHandlers()
     sigaction(SIGTERM, &sa, nullptr);
 }
 
+#endif
+
+#ifdef Q_OS_DARWIN
+// Fork: links (moonlightnext://...) and Dock clicks, for the app's own window.
+class ManagerEvents : public QObject
+{
+public:
+    using QObject::QObject;
+    bool eventFilter(QObject* object, QEvent* event) override
+    {
+        if (event->type() == QEvent::FileOpen) {
+            managerOpenUrl(static_cast<QFileOpenEvent*>(event)->url().toString(QUrl::FullyEncoded).toUtf8().constData());
+            return true;
+        }
+        if (event->type() == QEvent::ApplicationActivate && QGuiApplication::allWindows().isEmpty()) {
+            managerShow();
+        }
+        return QObject::eventFilter(object, event);
+    }
+};
 #endif
 
 int main(int argc, char *argv[])
@@ -995,6 +1016,7 @@ int main(int argc, char *argv[])
         // MOONLIGHT_CLASSIC=1 gives Moonlight's own screens, as before.
         if (!qEnvironmentVariableIsSet("MOONLIGHT_CLASSIC")) {
             managerStart();
+            app.installEventFilter(new ManagerEvents(&app));
             hasGUI = false;
             break;
         }

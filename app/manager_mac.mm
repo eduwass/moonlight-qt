@@ -456,7 +456,13 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 - (void)connect:(id)sender
 {
-    NSDictionary* device = [[[self device] copy] autorelease];
+    [self start:[self device]];
+}
+
+// Starts the stream of a device, or brings its window forward if it is open.
+- (void)start:(NSDictionary*)asGiven
+{
+    NSDictionary* device = [[asGiven copy] autorelease];
     NSString* deviceName = device[@"name"];
     if (device == nil || [device[@"address"] length] == 0) {
         return;
@@ -487,6 +493,10 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         NSString* rule = [device[@"fpsRule"] length] > 0 ? device[@"fpsRule"] : linux ? @"11059200:50:60" : @"8294400:40:60";
         NSArray<NSString*>* parts = [rule componentsSeparatedByString:@":"];
         NSInteger fps = parts.count == 3 ? (pw * ph > [parts[0] integerValue] ? [parts[1] integerValue] : [parts[2] integerValue]) : 60;
+        if ([device[@"fps"] integerValue] > 0) {
+            fps = [device[@"fps"] integerValue]; // asked for by a link
+            rule = [NSString stringWithFormat:@"0:%ld:%ld", (long)fps, (long)fps];
+        }
 
         NSMutableArray* arguments = [NSMutableArray arrayWithArray:@[@"stream", at, @"Desktop", @"--resolution", [NSString stringWithFormat:@"%ldx%ld", (long)pw, (long)ph],
                                                                      @"--fps", [NSString stringWithFormat:@"%ld", (long)fps],
@@ -536,6 +546,58 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 - (void)settings:(id)sender
 {
     chromeSettingsOpen([[self device][@"name"] UTF8String] ?: "");
+}
+
+// ---- links: moonlightnext://connect/<device>?size=1920x1080&fixed=3840x2160&truepixels=1&raw=1&pointer=0&bitrate=20000&fps=60
+//      and moonlightnext://show. What a link says holds for that one stream; the device's own settings stay.
+
+- (BOOL)open:(NSURL*)url
+{
+    NSURLComponents* parts = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    if (![parts.host isEqualToString:@"connect"]) {
+        [window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+        return NO;
+    }
+    NSString* wanted = parts.path.length > 1 ? [parts.path substringFromIndex:1] : @"";
+    NSMutableDictionary* device = nil;
+    for (NSDictionary* each in s_Devices) {
+        if ([each[@"name"] caseInsensitiveCompare:wanted] == NSOrderedSame || [each[@"address"] caseInsensitiveCompare:wanted] == NSOrderedSame ||
+                [each[@"host"] caseInsensitiveCompare:wanted] == NSOrderedSame) {
+            device = [[each mutableCopy] autorelease];
+        }
+    }
+    if (device == nil) {
+        NSAlert* alert = [[[NSAlert alloc] init] autorelease];
+        alert.messageText = [NSString stringWithFormat:@"No device called “%@”", wanted];
+        alert.informativeText = @"A link names a device as it is called in the list, or by its address.";
+        [window makeKeyAndOrderFront:nil];
+        [alert beginSheetModalForWindow:window completionHandler:nil];
+        return NO;
+    }
+    for (NSURLQueryItem* item in parts.queryItems) {
+        NSArray<NSString*>* size = [item.value.lowercaseString componentsSeparatedByString:@"x"];
+        bool isSize = size.count == 2 && size[0].integerValue >= 320 && size[1].integerValue >= 200;
+        bool on = item.value.boolValue || [item.value isEqualToString:@"on"];
+        if ([item.name isEqualToString:@"size"] && isSize) {
+            device[@"windowWidth"] = @(size[0].integerValue);
+            device[@"windowHeight"] = @(size[1].integerValue);
+        }
+        else if ([item.name isEqualToString:@"fixed"]) {
+            device[@"fixed"] = @(isSize || on);
+            if (isSize) {
+                device[@"width"] = @(size[0].integerValue);
+                device[@"height"] = @(size[1].integerValue);
+            }
+        }
+        else if ([item.name isEqualToString:@"truepixels"]) device[@"truePixels"] = @(on);
+        else if ([item.name isEqualToString:@"raw"]) device[@"rawColor"] = @(on);
+        else if ([item.name isEqualToString:@"pointer"]) device[@"localCursor"] = @(on);
+        else if ([item.name isEqualToString:@"bitrate"]) device[@"bitrate"] = @(MAX(0, item.value.integerValue));
+        else if ([item.name isEqualToString:@"fps"]) device[@"fps"] = @(MAX(0, item.value.integerValue));
+    }
+    [self start:device];
+    return YES;
 }
 
 // ---- building the window
@@ -750,12 +812,58 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 @end
 
+static bool s_OpenedByLink;
+static NSDate* s_StartedAt;
+
 void managerStart()
 {
+    s_StartedAt = [[NSDate date] retain];
     loadDevices();
     s_Manager = [[ManagerController alloc] init];
     [s_Manager build];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    // Started by a link to a device, the app shows that device's stream and
+    // not this window (the Dock icon brings it up). macOS says which kind of
+    // start this is when the app has finished launching.
+    static bool shown;
+    void (^showWindow)(void) = ^{
+        if (!shown && !s_OpenedByLink) {
+            shown = true;
+            [s_Manager->window makeKeyAndOrderFront:nil];
+            [NSApp activateIgnoringOtherApps:YES];
+        }
+    };
+    [NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification* note) {
+        // The event that started the app: "open this link", or plain "open".
+        NSAppleEventDescriptor* event = NSAppleEventManager.sharedAppleEventManager.currentAppleEvent;
+        if (!(event.eventClass == kInternetEventClass && event.eventID == kAEGetURL)) {
+            showWindow();
+        }
+    }];
+    // If that never comes, or the link was not one to a device.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), showWindow);
+}
+
+void managerOpenUrl(const char* url)
+{
+    NSURL* parsed = [NSURL URLWithString:@(url)];
+    if (s_Manager != nil && parsed != nil && [s_Manager open:parsed]) {
+        // The app was started for this link if it has only just started:
+        // then its own window is not what was asked for.
+        if (!s_OpenedByLink && -s_StartedAt.timeIntervalSinceNow < 4) {
+            [s_Manager->window orderOut:nil];
+        }
+        s_OpenedByLink = true;
+    }
+}
+
+void managerShow()
+{
+    // Not for the activation that comes with being started for a link.
+    if (s_OpenedByLink && -s_StartedAt.timeIntervalSinceNow < 4) {
+        return;
+    }
     [s_Manager->window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 }
