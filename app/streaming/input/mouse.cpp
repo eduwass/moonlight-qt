@@ -1,3 +1,4 @@
+#include "streaming/chrome.h"
 #include "input.h"
 
 #include <Limelight.h>
@@ -98,6 +99,10 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
     }
     else if (event->which == SDL_TOUCH_MOUSEID) {
         // Ignore synthetic mouse events
+        return;
+    }
+    else if (chromeHasPointer()) {
+        // Fork: the pointer is on the window's bar, see chrome_mac.mm
         return;
     }
 

@@ -41,6 +41,7 @@ struct ChromeState {
 void chromeStart(SDL_Window* window, void (*action)(int));
 void chromeUpdate(const ChromeState* state);
 bool chromeShown();
+bool chromeHasPointer(); // the pointer is on the bar, and its movement is not for the remote machine
 // A key was pressed or released, with SDL's key code and modifier state.
 // True if the chrome took it, and it must not go to the remote machine.
 bool chromeKey(int key, bool down, int mods);
@@ -50,6 +51,7 @@ void chromeLeftFullscreen(); // the window is back from fullscreen and has its s
 static inline void chromeStart(SDL_Window*, void (*)(int)) {}
 static inline void chromeUpdate(const ChromeState*) {}
 static inline bool chromeShown() { return false; }
+static inline bool chromeHasPointer() { return false; }
 static inline bool chromeKey(int, bool, int) { return false; }
 static inline void chromeRaise() {}
 static inline void chromeLeftFullscreen() {}

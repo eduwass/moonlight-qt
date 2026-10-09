@@ -573,6 +573,11 @@ static void showBar(bool show)
     }
 }
 
+bool chromeHasPointer()
+{
+    return s_Bar != nil && s_Bar->inside;
+}
+
 bool chromeShown()
 {
     return s_Shown;
