@@ -221,7 +221,10 @@ static void rawColorIn(NSView* view, CGColorSpaceRef display)
 {
     if ([view.layer isKindOfClass:[CAMetalLayer class]]) {
         CAMetalLayer* layer = (CAMetalLayer*)view.layer;
-        if (layer.colorspace == nullptr || !CFEqual(layer.colorspace, display)) {
+        // Not an HDR picture: its values only mean something in the colour
+        // space the renderer gave the layer.
+        bool sdr = layer.pixelFormat == MTLPixelFormatBGRA8Unorm || layer.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB;
+        if (sdr && (layer.colorspace == nullptr || !CFEqual(layer.colorspace, display))) {
             layer.colorspace = display;
         }
     }
