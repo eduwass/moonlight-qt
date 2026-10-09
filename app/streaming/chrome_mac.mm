@@ -36,6 +36,11 @@ static NSRect s_WindowedFrame; // where the window was before it went fullscreen
 static NSButton* s_Lights[3];
 static NSView* s_Content; // the window's content view; ours hang in it
 
+// The bar worked from the keyboard: Ctrl+Option+Shift+B opens it with one
+// control ringed, the arrows move the ring, Space acts, Esc gives the keyboard
+// back to the remote machine. s_Focus is -1 when the keyboard is not in it.
+static int s_Focus = -1;
+
 static NSColor* rgba(uint32_t value)
 {
     return [NSColor colorWithSRGBRed:((value >> 24) & 0xFF) / 255.0
@@ -299,7 +304,7 @@ static void showTip(ChromeButton* button);
 }
 - (void)leave
 {
-    if (!inside) {
+    if (!inside && s_Focus < 0) {
         showBar(false);
     }
 }
@@ -350,6 +355,16 @@ static void showTip(ChromeButton* button);
     [rgba(0xFFFFFF24) setFill];
     NSRectFillUsingOperation(NSMakeRect(73, 6, 1, 14), NSCompositingOperationSourceOver);
     NSRectFillUsingOperation(NSMakeRect(166, 6, 1, 14), NSCompositingOperationSourceOver);
+
+    // The keyboard's ring: white, set off from the control by a gap in the bar's colour.
+    if (s_Focus >= 0) {
+        static const CGFloat lefts[] = {134, 175, 203, 231, 259};
+        NSBezierPath* ring = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(NSMakeRect(lefts[s_Focus], 4, 24, 18), -2.25, -2.25)
+                                                             xRadius:8 yRadius:8];
+        ring.lineWidth = 1.5;
+        [rgba(0xFFFFFFFF) setStroke];
+        [ring stroke];
+    }
 }
 @end
 
@@ -432,22 +447,30 @@ static void switchTip(std::vector<TipLine>& lines, NSString* name, NSString* sta
 static void fillTip(ChromeButton* button, std::vector<TipLine>& lines)
 {
     const ChromeState& s = s_State;
+    // From the keyboard the state line says what Space will do, as in the design.
+    bool keyboard = s_Focus >= 0;
     if (button == s_Bar->stats) {
-        switchTip(lines, @"Stats", s.stats ? @"On. The stream's numbers are shown over the picture." : @"Off.", shortcut('S'));
+        switchTip(lines, @"Stats",
+                  keyboard ? (s.stats ? @"On. Space turns it off." : @"Off. Space turns it on.")
+                  : s.stats ? @"On. The stream's numbers are shown over the picture." : @"Off.", shortcut('S'));
     }
     else if (button == s_Bar->truePixels) {
         switchTip(lines, @"True Pixels",
                   s.busy ? @"The stream restarts at the new size and the picture returns in a moment."
+                  : keyboard ? (s.truePixels ? @"On. Space turns it off." : @"Off. Space turns it on.")
                   : s.truePixels ? @"On. The stream has your monitor's real resolution: faster, and all the glass can show."
-                  : @"Off. Full 2x Retina: more than the monitor can show, and slower.", nil);
+                  : @"Off. Full 2x Retina: more than the monitor can show, and slower.", shortcut('T'));
     }
     else if (button == s_Bar->follow) {
         switchTip(lines, @"Follow size",
-                  s.followSize ? @"On. The stream restarts at the window's size when you resize it."
-                  : @"Off. The stream keeps its size and is scaled to the window.", nil);
+                  keyboard ? (s.followSize ? @"On. Space turns it off." : @"Off. Space turns it on.")
+                  : s.followSize ? @"On. The stream restarts at the window's size when you resize it."
+                  : @"Off. The stream keeps its size and is scaled to the window.", shortcut('F'));
     }
     else if (button == s_Bar->fullscreen) {
-        switchTip(lines, @"Fullscreen", s.fullscreen ? @"On." : @"Off.", shortcut('X'));
+        switchTip(lines, @"Fullscreen",
+                  keyboard ? (s.fullscreen ? @"On. Space turns it off." : @"Off. Space turns it on.")
+                  : s.fullscreen ? @"On." : @"Off.", shortcut('X'));
     }
     else {
         static NSString* const kinds[] = {@"Thunderbolt", @"Ethernet", @"Wi-Fi", @"Tailscale", @"Network"};
@@ -545,6 +568,78 @@ bool chromeShown()
     return s_Shown;
 }
 
+static ChromeButton* focused()
+{
+    ChromeButton* buttons[] = {s_Bar->link, s_Bar->stats, s_Bar->truePixels, s_Bar->follow, s_Bar->fullscreen};
+    return s_Focus >= 0 ? buttons[s_Focus] : nil;
+}
+
+static void setFocus(int focus)
+{
+    s_Focus = focus;
+    for (NSView* view in s_Bar.subviews) {
+        view.needsDisplay = YES;
+    }
+    if (focus >= 0) {
+        showBar(true);
+        showTip(focused());
+    }
+    else if (!s_Bar->inside) {
+        showBar(false);
+    }
+    else {
+        showTip(nil);
+    }
+}
+
+bool chromeKey(int key, bool down, bool chord)
+{
+    if (s_Bar == nil) {
+        return false;
+    }
+
+    if (chord && (key == SDLK_b || key == SDLK_i || key == SDLK_t || key == SDLK_f)) {
+        if (down) {
+            if (key == SDLK_b) {
+                setFocus(s_Focus >= 0 ? -1 : 1); // again closes it
+            }
+            else if (key == SDLK_i) {
+                setFocus(s_Focus == 0 ? -1 : 0);
+            }
+            else if (s_Action != nullptr) {
+                s_Action(key == SDLK_t ? CHROME_TRUE_PIXELS : CHROME_FOLLOW);
+            }
+        }
+        return true;
+    }
+    if (s_Focus < 0) {
+        return false;
+    }
+
+    // The keyboard is in the bar. Modifiers still go to the remote machine: it
+    // saw them go down before we took over, and must see them come up.
+    switch (key) {
+    case SDLK_LCTRL: case SDLK_RCTRL: case SDLK_LSHIFT: case SDLK_RSHIFT:
+    case SDLK_LALT: case SDLK_RALT: case SDLK_LGUI: case SDLK_RGUI:
+        return false;
+    }
+    if (down) {
+        if (key == SDLK_LEFT || key == SDLK_RIGHT) {
+            setFocus((s_Focus + (key == SDLK_LEFT ? 4 : 1)) % 5);
+        }
+        else if (key == SDLK_SPACE || key == SDLK_RETURN) {
+            ChromeButton* button = focused();
+            if (button->action >= 0 && !button->busy && s_Action != nullptr) {
+                s_Action(button->action);
+            }
+        }
+        else if (key == SDLK_ESCAPE) {
+            setFocus(-1);
+        }
+    }
+    return true;
+}
+
 static ChromeButton* addButton(ChromeBar* bar, CGFloat x, NSString* symbol, int action)
 {
     ChromeButton* button = [[[ChromeButton alloc] initWithFrame:NSMakeRect(x, 4, 24, 18)] autorelease];
@@ -578,6 +673,7 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     s_Action = action;
     s_Shown = false;
     s_TipFor = nil;
+    s_Focus = -1;
     s_Content = content;
     s_WindowedFrame = NSZeroRect;
 

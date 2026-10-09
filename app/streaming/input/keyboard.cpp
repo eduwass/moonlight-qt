@@ -1,3 +1,4 @@
+#include "streaming/chrome.h"
 #include "streaming/session.h"
 
 #include <Limelight.h>
@@ -192,6 +193,12 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
     if (event->repeat) {
         // Ignore repeat key down events
         SDL_assert(event->state == SDL_PRESSED);
+        return;
+    }
+
+    // Fork: keys for the window's chrome, see chrome_mac.mm
+    if (chromeKey(event->keysym.sym, event->state == SDL_PRESSED,
+                  (event->keysym.mod & KMOD_CTRL) && (event->keysym.mod & KMOD_ALT) && (event->keysym.mod & KMOD_SHIFT))) {
         return;
     }
 
