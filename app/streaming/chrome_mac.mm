@@ -356,6 +356,10 @@ static void showTip(ChromeButton* button);
 // The traffic lights show their symbols while the pointer is over the group,
 // and ask their superview whether it is (an AppKit convention, not public).
 - (BOOL)_mouseInGroup:(NSButton*)button { return inside; }
+// The bar has this machine's pointer, whatever the stream does with it: over
+// the picture it may be hidden (the remote cursor is in the picture), and
+// pointer movement on the bar does not reach the remote machine.
+- (void)resetCursorRects { [self addCursorRect:self.bounds cursor:NSCursor.arrowCursor]; }
 - (void)lights:(BOOL)redraw
 {
     for (NSView* view in self.subviews) {
@@ -606,6 +610,7 @@ static void showBar(bool show)
     s_Shown = show;
     s_Bar.hidden = !show;
     s_Tab.hidden = show;
+    [s_Bar.window invalidateCursorRectsForView:s_Bar];
     if (!show) {
         showTip(nil);
     }
