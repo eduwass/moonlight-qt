@@ -11,6 +11,9 @@ void managerOpenUrl(const char* url);
 // the app's own window, which is started if there is none.
 void managerForwardUrl(const char* url);
 
+// Says something went wrong, in a window of its own, and waits for OK. Any process of the app.
+void managerAlert(const char* text);
+
 // The Dock icon was clicked with no window showing.
 void managerShow();
 

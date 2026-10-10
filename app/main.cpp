@@ -458,6 +458,61 @@ public:
 };
 #endif
 
+#ifdef Q_OS_DARWIN
+// Fork: a stream the device window started, run from here and not by
+// Moonlight's own screens. Those are QML, and loading them was half a second
+// of every connect (measured: 0.52 s of the first 0.78 in main) for a window
+// that such a stream never shows: what is on screen while it connects is the
+// device window's picture of the machine (manager_mac.mm, wait:). The steps
+// are the ones CliStartStreamSegue.qml and StreamSegue.qml take.
+class StreamRunner : public QObject
+{
+public:
+    StreamRunner(CliStartStream::Launcher* launcher, QObject* parent) : QObject(parent), m_Launcher(launcher) {}
+
+    void run()
+    {
+        connect(m_Launcher, &CliStartStream::Launcher::sessionCreated, this, [this](QString, Session* session) {
+            connect(session, &Session::stageFailed, this, [this](QString stage, int errorCode, QString failingPorts) {
+                m_Error = QStringLiteral("Starting %1 failed: error %2.").arg(stage).arg(errorCode);
+                if (!failingPorts.isEmpty()) {
+                    m_Error += QStringLiteral("\n\nCheck the firewall on the way for port(s): %1").arg(failingPorts);
+                }
+            });
+            connect(session, &Session::displayLaunchError, this, [this](QString text) { m_Error = text; });
+            connect(session, &Session::sessionFinished, this, [this](int) { finish(); });
+            if (!session->initialize(nullptr)) {
+                finish();
+                return;
+            }
+            session->start();
+        });
+        connect(m_Launcher, &CliStartStream::Launcher::failed, this, [this](QString text) {
+            m_Error = text;
+            finish();
+        });
+        connect(m_Launcher, &CliStartStream::Launcher::appQuitRequired, this, [this](QString appName) {
+            m_Error = QStringLiteral("%1 is running on that machine, started by something else. End it there, or connect with Moonlight's own window (… > Classic Moonlight) to end it from here.").arg(appName);
+            finish();
+        });
+        m_Launcher->execute(new ComputerManager(StreamingPreferences::get()));
+    }
+
+private:
+    void finish()
+    {
+        if (!m_Error.isEmpty()) {
+            qWarning() << m_Error;
+            managerAlert(m_Error.toUtf8().constData());
+        }
+        QCoreApplication::quit();
+    }
+
+    CliStartStream::Launcher* m_Launcher;
+    QString m_Error;
+};
+#endif
+
 int main(int argc, char *argv[])
 {
     SDL_SetMainReady();
@@ -1053,6 +1108,14 @@ int main(int argc, char *argv[])
             QString host    = streamParser.getHost();
             QString appName = streamParser.getAppName();
             auto launcher   = new CliStartStream::Launcher(host, appName, preferences, &app);
+#ifdef Q_OS_DARWIN
+            // MOONLIGHT_DEVICE: the device window started this stream.
+            if (qEnvironmentVariableIsSet("MOONLIGHT_DEVICE") && !qEnvironmentVariableIsSet("MOONLIGHT_QML")) {
+                (new StreamRunner(launcher, &app))->run();
+                hasGUI = false;
+                break;
+            }
+#endif
             engine.rootContext()->setContextProperty("launcher", launcher);
             break;
         }

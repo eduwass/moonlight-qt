@@ -1323,6 +1323,15 @@ static void passLink(NSString* link, bool thenQuit)
     [passer say];
 }
 
+void managerAlert(const char* text)
+{
+    NSAlert* alert = [[[NSAlert alloc] init] autorelease];
+    alert.messageText = @"The stream could not be started";
+    alert.informativeText = @(text) ?: @"";
+    [NSApp activateIgnoringOtherApps:YES];
+    [alert runModal];
+}
+
 void managerForwardUrl(const char* url)
 {
     NSString* link = @(url);
