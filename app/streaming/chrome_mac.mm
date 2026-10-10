@@ -762,6 +762,12 @@ static ChromeWarm* s_Warm;
 // away, or any stream's window with nothing of it showing: minimised, wholly
 // behind other windows, on another Space (macOS says so: occlusionState).
 static std::atomic<bool> s_Unseen, s_Covered;
+// Nor is anything seen while this Mac's screen is locked or its displays are
+// asleep. macOS does not always call a window covered then (one made while
+// the screen is locked is never told anything), and drawing to a display that
+// is off waits a second for every frame: the frames pile up undrawn ("decode
+// unit queue overflow", seen all through a stream started in that state).
+static std::atomic<bool> s_Away;
 
 static std::atomic<bool> s_Connection;
 
@@ -784,7 +790,7 @@ void chromeSessionEnding()
 
 bool chromeUnseen()
 {
-    return s_Unseen || s_Covered;
+    return s_Unseen || s_Covered || s_Away;
 }
 
 @implementation ChromeWarm
@@ -933,6 +939,28 @@ bool chromeUnseen()
         // And once more when the move has settled (the slide between Spaces, the zoom into fullscreen).
         [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(fresh) object:nil];
         [self performSelector:@selector(fresh) withObject:nil afterDelay:0.8];
+    }
+}
+- (void)away:(NSNotification*)note
+{
+    if (!s_Away) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "The screen is locked or asleep: frames are not drawn");
+    }
+    s_Away = true;
+}
+- (void)back:(NSNotification*)note
+{
+    // Both must be over: unlocking comes while the displays are still waking, or after.
+    CFDictionaryRef session = CGSessionCopyCurrentDictionary();
+    bool locked = session != nullptr && CFDictionaryGetValue(session, CFSTR("CGSSessionScreenIsLocked")) == kCFBooleanTrue;
+    if (session != nullptr) {
+        CFRelease(session);
+    }
+    bool asleep = CGDisplayIsAsleep(CGMainDisplayID());
+    if (s_Away && !locked && !asleep) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "The screen is there again");
+        s_Away = false;
+        [self moved:nil]; // a whole new picture
     }
 }
 - (void)spaceChanged:(NSNotification*)note
@@ -1102,6 +1130,18 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         s_Warm = [[ChromeWarm alloc] init];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(becameActive:) name:NSApplicationDidBecomeActiveNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(coverChanged:) name:NSWindowDidChangeOcclusionStateNotification object:nil];
+        [NSWorkspace.sharedWorkspace.notificationCenter addObserver:s_Warm selector:@selector(away:) name:NSWorkspaceScreensDidSleepNotification object:nil];
+        [NSWorkspace.sharedWorkspace.notificationCenter addObserver:s_Warm selector:@selector(back:) name:NSWorkspaceScreensDidWakeNotification object:nil];
+        [NSDistributedNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(away:) name:@"com.apple.screenIsLocked" object:nil];
+        [NSDistributedNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(back:) name:@"com.apple.screenIsUnlocked" object:nil];
+        // And how things are now: a stream can be started with the screen locked (a link from a script, a schedule).
+        CFDictionaryRef session = CGSessionCopyCurrentDictionary();
+        if ((session != nullptr && CFDictionaryGetValue(session, CFSTR("CGSSessionScreenIsLocked")) == kCFBooleanTrue) || CGDisplayIsAsleep(CGMainDisplayID())) {
+            [s_Warm away:nil];
+        }
+        if (session != nullptr) {
+            CFRelease(session);
+        }
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(moved:) name:NSWindowDidEnterFullScreenNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(moved:) name:NSWindowDidExitFullScreenNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(moved:) name:NSWindowDidDeminiaturizeNotification object:nil];
