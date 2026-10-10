@@ -327,7 +327,13 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     // that field is not saved yet (it is when the field is left), and this is
     // also called for news that has nothing to do with the form: a stream
     // that has started or gone, a device that answers again.
-    if (![window.firstResponder isKindOfClass:[NSText class]]) {
+    // (Only for the device the form already shows: for another one it is
+    // filled anew whatever is being typed, or that one's values would be
+    // written into this one when the field is left.)
+    static NSInteger shownRow = -1;
+    bool sameDevice = shownRow == table.selectedRow;
+    shownRow = table.selectedRow;
+    if (!sameDevice || ![window.firstResponder isKindOfClass:[NSText class]]) {
         name.stringValue = deviceName;
         address.stringValue = device[@"address"] ?: @"";
         [system selectItemAtIndex:[device[@"system"] isEqualToString:@"linux"] ? 1 : 0];
@@ -584,6 +590,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 - (void)add:(id)sender
 {
+    [window makeFirstResponder:nil]; // what is being typed belongs to the device it was typed for
     [s_Devices addObject:[[@{@"name": @"New device", @"address": @"", @"system": @"mac", @"windowWidth": @1920, @"windowHeight": @1080, @"truePixels": @YES} mutableCopy] autorelease]];
     saveDevices();
     [table reloadData];
@@ -604,6 +611,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     [alert addButtonWithTitle:@"Cancel"];
     [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse response) {
         if (response == NSAlertFirstButtonReturn) {
+            [window makeFirstResponder:nil]; // nothing typed for this one is left to land on the next
             [s_Devices removeObject:device];
             saveDevices();
             [table reloadData];
@@ -1493,6 +1501,16 @@ static void passLink(NSString* link, bool thenQuit)
 // if a later macOS has no such method this does nothing and the half second is
 // back, nothing else. The public defaults that take Dictation and Emoji out of
 // the menu do not stop the library being loaded (tried).
+bool managerScreenLocked()
+{
+    CFDictionaryRef session = CGSessionCopyCurrentDictionary();
+    bool locked = session != nullptr && CFDictionaryGetValue(session, CFSTR("CGSSessionScreenIsLocked")) == kCFBooleanTrue;
+    if (session != nullptr) {
+        CFRelease(session);
+    }
+    return locked;
+}
+
 void managerBeforeLaunch()
 {
     Method asked = class_getClassMethod(NSTextView.class, NSSelectorFromString(@"_supportsWritingTools"));

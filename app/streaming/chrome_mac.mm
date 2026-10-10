@@ -769,6 +769,24 @@ static std::atomic<bool> s_Unseen, s_Covered;
 // unit queue overflow", seen all through a stream started in that state).
 static std::atomic<bool> s_Away;
 
+// Locked, or every display asleep. (Every one, not the main one: the stream's
+// window may be on another, and that one awake.)
+static bool screenAway()
+{
+    CFDictionaryRef session = CGSessionCopyCurrentDictionary();
+    bool locked = session != nullptr && CFDictionaryGetValue(session, CFSTR("CGSSessionScreenIsLocked")) == kCFBooleanTrue;
+    if (session != nullptr) {
+        CFRelease(session);
+    }
+    CGDirectDisplayID displays[16];
+    uint32_t count = 0;
+    bool anyAwake = CGGetOnlineDisplayList(16, displays, &count) != kCGErrorSuccess || count == 0;
+    for (uint32_t i = 0; i < count; i++) {
+        anyAwake |= !CGDisplayIsAsleep(displays[i]);
+    }
+    return locked || !anyAwake;
+}
+
 static std::atomic<bool> s_Connection;
 
 void chromeConnection(bool up)
@@ -963,13 +981,7 @@ bool chromeUnseen()
 - (void)back:(NSNotification*)note
 {
     // Both must be over: unlocking comes while the displays are still waking, or after.
-    CFDictionaryRef session = CGSessionCopyCurrentDictionary();
-    bool locked = session != nullptr && CFDictionaryGetValue(session, CFSTR("CGSSessionScreenIsLocked")) == kCFBooleanTrue;
-    if (session != nullptr) {
-        CFRelease(session);
-    }
-    bool asleep = CGDisplayIsAsleep(CGMainDisplayID());
-    if (s_Away && !locked && !asleep) {
+    if (s_Away && !screenAway()) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "The screen is there again");
         s_Away = false;
         [self moved:nil]; // a whole new picture
@@ -1146,14 +1158,7 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         [NSWorkspace.sharedWorkspace.notificationCenter addObserver:s_Warm selector:@selector(back:) name:NSWorkspaceScreensDidWakeNotification object:nil];
         [NSDistributedNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(away:) name:@"com.apple.screenIsLocked" object:nil];
         [NSDistributedNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(back:) name:@"com.apple.screenIsUnlocked" object:nil];
-        // And how things are now: a stream can be started with the screen locked (a link from a script, a schedule).
-        CFDictionaryRef session = CGSessionCopyCurrentDictionary();
-        if ((session != nullptr && CFDictionaryGetValue(session, CFSTR("CGSSessionScreenIsLocked")) == kCFBooleanTrue) || CGDisplayIsAsleep(CGMainDisplayID())) {
-            [s_Warm away:nil];
-        }
-        if (session != nullptr) {
-            CFRelease(session);
-        }
+
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(moved:) name:NSWindowDidEnterFullScreenNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(moved:) name:NSWindowDidExitFullScreenNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(moved:) name:NSWindowDidDeminiaturizeNotification object:nil];
@@ -1165,6 +1170,11 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     }
     [s_Warm rest]; // whatever the last session left: its timer, its hold on App Nap
     s_Covered = false;
+    // How things are now, at every session's start: a stream can be started
+    // with the screen locked (a link from a script, a schedule).
+    if (screenAway()) {
+        [s_Warm away:nil];
+    }
     s_Connection = true; // a session's window is made once its connection is up
     [s_Warm->startedAt release];
     s_Warm->startedAt = [[NSDate date] retain];

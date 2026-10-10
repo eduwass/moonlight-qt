@@ -534,6 +534,16 @@ int main(int argc, char *argv[])
     if (qEnvironmentVariableIsSet("MOONLIGHT_NO_SOUND")) {
         qputenv("SDL_AUDIODRIVER", "dummy");
     }
+#ifdef Q_OS_DARWIN
+    // The same for a device's stream started while this Mac's screen is
+    // locked (a link from a script, a schedule): the output cannot be opened
+    // then, twice 15 s go by finding that out, and the stream would have had
+    // no sound anyway.
+    else if (qEnvironmentVariableIsSet("MOONLIGHT_DEVICE") && managerScreenLocked()) {
+        qputenv("SDL_AUDIODRIVER", "dummy");
+        fprintf(stderr, "The screen is locked: this stream has no sound\n");
+    }
+#endif
 
     // Set the app version for the QCommandLineParser's showVersion() command
     QCoreApplication::setApplicationVersion(VERSION_STR);
