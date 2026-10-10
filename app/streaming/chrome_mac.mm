@@ -950,6 +950,9 @@ bool chromeUnseen()
     hidden = true;
     s_Unseen = true;
     s_Focus = -1; // the keyboard is not left in a bar that is out of sight: typing would go nowhere when the window is back
+    for (NSView* view in s_Bar.subviews) {
+        view.needsDisplay = YES; // its ring too: in a title bar the bar is not hidden, and would keep it drawn
+    }
     showBar(false);
     [window orderOut:nil];
     SDL_EnableScreenSaver(); // an unseen stream must not keep this Mac's screen awake
