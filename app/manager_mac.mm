@@ -16,7 +16,7 @@
 //   system                 "mac" or "linux" (the mark on the stream's bar)
 //   fixed, width, height   a fixed stream size in pixels, scaled to fit the window; otherwise the window's pixels
 //   windowWidth/Height     the window to open, in points
-//   truePixels, rawColor, localCursor
+//   truePixels, rawColor, localCursor, noSound
 //   fpsRule                "pixels:above:below", see dynres.cpp (MOONLIGHT_FPS_ABOVE)
 //   bitrate                kbps, 0 for Moonlight's own choice
 //   screenshot             a shell command that writes a picture of the device's screen to stdout
@@ -180,6 +180,7 @@ static void tellStream(NSString* name, NSString* what)
     NSButton* truePixels;
     NSButton* rawColor;
     NSButton* localCursor;
+    NSButton* noSound;
     NSTextField* bitrate;
     NSTextField* screenshot;
     NSTextField* before;
@@ -339,6 +340,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         truePixels.enabled = !fixed;
         rawColor.state = [device[@"rawColor"] boolValue];
         localCursor.state = [device[@"localCursor"] boolValue];
+        noSound.state = [device[@"noSound"] boolValue];
         // What it is on that kind of machine, so that a pointer that never changes shape is no surprise.
         localCursor.title = [device[@"system"] isEqualToString:@"linux"] ? @"Instant pointer (plain arrow)" : @"Instant pointer";
         bitrate.stringValue = [device[@"bitrate"] integerValue] > 0 ? [device[@"bitrate"] stringValue] : @"";
@@ -560,6 +562,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     }
     device[@"truePixels"] = @(truePixels.state == NSControlStateValueOn);
     device[@"rawColor"] = @(rawColor.state == NSControlStateValueOn);
+    device[@"noSound"] = @(noSound.state == NSControlStateValueOn);
     device[@"localCursor"] = @(localCursor.state == NSControlStateValueOn);
     device[@"bitrate"] = @(MIN(500000, MAX(0, bitrate.integerValue)));
     device[@"screenshot"] = screenshot.stringValue;
@@ -984,6 +987,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         if (fixed) environment[@"MOONLIGHT_FOLLOW"] = @"0";
         if (!fixed && [device[@"truePixels"] boolValue]) environment[@"MOONLIGHT_PANEL_PIXELS"] = @"1";
         if ([device[@"rawColor"] boolValue]) environment[@"MOONLIGHT_RAW_COLOR"] = @"1";
+        if ([device[@"noSound"] boolValue]) environment[@"MOONLIGHT_NO_SOUND"] = @"1";
         if ([device[@"clipboard"] length] > 0) environment[@"MOONLIGHT_CLIPBOARD"] = device[@"clipboard"];
         if ([device[@"localCursor"] boolValue]) environment[@"MOONLIGHT_LOCAL_CURSOR"] = @"1";
         [self launch:arguments environment:environment for:deviceName];
@@ -1280,7 +1284,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     truePixels = [self check:@"True Pixels" tip:@"The stream has as many pixels as the monitor's panel, not as many as macOS draws. Faster on a scaled display."];
     rawColor = [self check:@"Raw colours" tip:@"Show the device's colour values as they are, as its own cable to this monitor would. For a desktop tuned by eye on this monitor."];
     localCursor = [self check:@"Instant pointer" tip:@"This Mac draws the pointer itself, so it moves with the hand. A Mac with the cursor helper shows its own cursor shapes; a Hyprland PC set up for it shows a plain arrow."];
-    NSStackView* checks = [NSStackView stackViewWithViews:@[truePixels, rawColor, localCursor]];
+    noSound = [self check:@"No sound" tip:@"Do not play the device's sound here, and do not open this Mac's sound output for the stream. For a device that sends none, or whose sound reaches you another way."];
+    NSStackView* checks = [NSStackView stackViewWithViews:@[truePixels, rawColor, localCursor, noSound]];
     checks.spacing = 16;
     bitrate = [self field:@"automatic"];
     [bitrate.widthAnchor constraintEqualToConstant:90].active = YES;
@@ -1412,9 +1417,10 @@ static NSMutableDictionary* plainEnvironment()
 {
     NSMutableDictionary* all = [[NSProcessInfo.processInfo.environment mutableCopy] autorelease];
     for (NSString* key in @[@"DEVICE", @"CHROME", @"FPS_ABOVE", @"WINDOW", @"WINDOW_AT", @"WINDOW_ONCE", @"FOLLOW", @"PANEL_PIXELS",
-                            @"RAW_COLOR", @"LOCAL_CURSOR", @"CLIPBOARD", @"OPEN_URL", @"CLASSIC"]) {
+                            @"RAW_COLOR", @"LOCAL_CURSOR", @"CLIPBOARD", @"OPEN_URL", @"CLASSIC", @"NO_SOUND"]) {
         [all removeObjectForKey:[@"MOONLIGHT_" stringByAppendingString:key]];
     }
+    [all removeObjectForKey:@"SDL_AUDIODRIVER"]; // set in a stream's process for MOONLIGHT_NO_SOUND, see main.cpp
     return all;
 }
 

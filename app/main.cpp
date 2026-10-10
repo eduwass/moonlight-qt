@@ -526,6 +526,14 @@ int main(int argc, char *argv[])
 #ifdef Q_OS_DARWIN
     managerBeforeLaunch();
 #endif
+    // Fork: MOONLIGHT_NO_SOUND (a device's "No sound"): the stream has SDL's
+    // sound driver that plays nothing, and this machine's sound output is
+    // never opened. That opening has been seen to hang for 17 s (CoreAudio's
+    // AudioQueueStart, with the display asleep) while the host gave up on a
+    // stream that was not answering.
+    if (qEnvironmentVariableIsSet("MOONLIGHT_NO_SOUND")) {
+        qputenv("SDL_AUDIODRIVER", "dummy");
+    }
 
     // Set the app version for the QCommandLineParser's showVersion() command
     QCoreApplication::setApplicationVersion(VERSION_STR);
