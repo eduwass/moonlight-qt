@@ -19,7 +19,7 @@ ssh my-mac 'caffeinate -u -t 30 >/dev/null 2>&1 & sleep 1'
 
 For the **instant pointer**, the host runs `cursor-share` (in `mac-host/`), which sends the cursor's shape to your Mac and tells Sunshine to leave its own cursor out of the picture.
 
-`mac-host/doctor.sh` checks all of this from another machine.
+`mac-host/install.sh`, run on the Mac, builds the helpers and sets up the services. `mac-host/doctor.sh` checks all of this from another machine.
 
 ## A Linux PC (Hyprland)
 
@@ -32,4 +32,4 @@ The **instant pointer** does not work on Hyprland: it hands out a cursor's pictu
 
 With an NVIDIA card stuck on an older driver, check that your Sunshine build's encoder still matches it (a GTX 1080 on driver 580 needs Sunshine 2026.516).
 
-`pc/doctor.sh` checks all of this from another machine.
+`pc/install.sh`, run on the PC, puts the configuration, the script and the two services in place. `pc/doctor.sh` checks all of this from another machine, including that what is installed is what is in the repository.
