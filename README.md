@@ -1,3 +1,5 @@
+> **This is the `eduwass` branch: MoonlightNext**, a fork for working on another computer's desktop in a window on a Mac (not for games). The stream follows the window's size, each stream has a window and a bar of its own, and the app opens on a list of your machines. What it adds, how to use it and what was measured are in [`site/docs`](site/docs/index.mdx) (`cd site && bun install && bun run dev` to read them as a site). `scripts/check-next.sh` is the fork's check. Everything below is Moonlight's own README.
+
 # Moonlight PC
 
 [Moonlight PC](https://moonlight-stream.org) is an open source PC client for NVIDIA GameStream and [Sunshine](https://github.com/LizardByte/Sunshine).
