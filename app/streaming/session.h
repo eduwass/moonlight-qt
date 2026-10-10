@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <QSemaphore>
 #include <QQuickWindow>
 
@@ -304,4 +305,8 @@ private:
     static CONNECTION_LISTENER_CALLBACKS k_ConnCallbacks;
     static Session* s_ActiveSession;
     static QSemaphore s_ActiveSessionSemaphore;
+
+public:
+    // Fork: the host ended the stream, and said so (no error). Any thread.
+    static std::atomic<bool> s_HostEnded;
 };

@@ -515,8 +515,12 @@ private:
         if (m_Again) {
             return; // on its way to being started again
         }
-        if (!m_Error.isEmpty()) {
-            qWarning() << m_Error;
+        // (Dropped with nothing said, too: a host that is being restarted
+        // properly says goodbye, and the stream would close without a word.)
+        if (!m_Error.isEmpty() || Session::s_HostEnded) {
+            if (!m_Error.isEmpty()) {
+                qWarning() << m_Error;
+            }
             // A stream that the host took and then dropped as it started (seen
             // with a host that was restarting, or still ending the stream
             // before): once more, a moment later, as this same process, which
@@ -539,12 +543,16 @@ private:
                     }
                     argv.append(nullptr);
                     execv(QCoreApplication::applicationFilePath().toLocal8Bit().constData(), argv.data());
-                    managerAlert(m_Error.toUtf8().constData()); // still here: it could not be done
+                    if (!m_Error.isEmpty()) {
+                        managerAlert(m_Error.toUtf8().constData()); // still here: it could not be done
+                    }
                     QCoreApplication::quit();
                 });
                 return;
             }
-            managerAlert(m_Error.toUtf8().constData());
+            if (!m_Error.isEmpty()) {
+                managerAlert(m_Error.toUtf8().constData());
+            }
         }
         QCoreApplication::quit();
     }

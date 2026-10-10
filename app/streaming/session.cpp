@@ -65,6 +65,7 @@ CONNECTION_LISTENER_CALLBACKS Session::k_ConnCallbacks = {
 };
 
 Session* Session::s_ActiveSession;
+std::atomic<bool> Session::s_HostEnded;
 QSemaphore Session::s_ActiveSessionSemaphore(1);
 
 void Session::clStageStarting(int stage)
@@ -94,6 +95,7 @@ void Session::clConnectionTerminated(int errorCode)
     // Display the termination dialog if this was not intended
     switch (errorCode) {
     case ML_ERROR_GRACEFUL_TERMINATION:
+        s_HostEnded = true; // fork: see main.cpp's StreamRunner
         break;
 
     case ML_ERROR_NO_VIDEO_TRAFFIC:
