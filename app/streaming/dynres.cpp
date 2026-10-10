@@ -7,6 +7,7 @@
 // is quit and launched again (not resumed) so that Sunshine reruns its prep
 // commands, which is where the host display gets resized.
 
+#include <openssl/rand.h>
 #include "session.h"
 #include "backend/nvhttp.h"
 #include "streaming/input/input.h"
@@ -581,6 +582,7 @@ bool Session::dynresTick()
     SDL_UnlockMutex(m_DecoderLock);
 
     chromeConnection(false);
+    s_Generation++; // what the old connection's threads still say is not for the new one: see clConnectionTerminated()
     LiStopConnection();
 
     try {
@@ -601,6 +603,14 @@ bool Session::dynresTick()
     m_StreamConfig.height = height;
     m_StreamConfig.fps = fpsFor(width, height, m_Preferences->fps);
     m_InputHandler->setStreamSize(width, height);
+    // A new key for the new connection, as a new session would have: the
+    // library numbers what it encrypts from zero again with every connection,
+    // and the same key with the same numbers must not be used twice.
+    RAND_bytes(reinterpret_cast<unsigned char*>(m_StreamConfig.remoteInputAesKey), sizeof(m_StreamConfig.remoteInputAesKey));
+    RAND_bytes(reinterpret_cast<unsigned char*>(m_StreamConfig.remoteInputAesIv), 4);
+    // The library starts a new thread for sound too: it is given its priority
+    // at its first sample, counted from here.
+    m_AudioSampleCount = 0;
 
     // LiStartConnection() fills unset callbacks with stubs in our struct. A
     // second call then rejects a pull renderer that "has" a submit callback.
@@ -609,6 +619,7 @@ bool Session::dynresTick()
     }
 
     if (!startConnectionAsync()) {
+        m_UnexpectedTermination = true; // not an ending that was asked for: what went wrong is to be said
         dynresBusy(m_Window, false);
         s_Cover = COVER_OFF;
         setWake(false);

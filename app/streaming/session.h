@@ -309,4 +309,8 @@ private:
 public:
     // Fork: the host ended the stream, and said so (no error). Any thread.
     static std::atomic<bool> s_HostEnded;
+    // Fork: counts the connections this session has had (dynres.cpp makes new
+    // ones in place). What an older one's threads still have to say is not
+    // for the one that is there now.
+    static std::atomic<int> s_Generation;
 };

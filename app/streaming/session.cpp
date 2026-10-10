@@ -66,6 +66,7 @@ CONNECTION_LISTENER_CALLBACKS Session::k_ConnCallbacks = {
 
 Session* Session::s_ActiveSession;
 std::atomic<bool> Session::s_HostEnded;
+std::atomic<int> Session::s_Generation;
 QSemaphore Session::s_ActiveSessionSemaphore(1);
 
 void Session::clStageStarting(int stage)
@@ -89,8 +90,17 @@ void Session::clStageFailed(int stage, int errorCode)
 
 void Session::clConnectionTerminated(int errorCode)
 {
+    // Fork: this runs on a thread the library does not wait for, and the test
+    // below takes its time: by its end the connection it speaks of may have
+    // been replaced in place (dynres.cpp), or the session be gone.
+    int generation = s_Generation;
     unsigned int portFlags = LiGetPortFlagsFromTerminationErrorCode(errorCode);
-    s_ActiveSession->m_PortTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
+    int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
+    if (generation != s_Generation || s_ActiveSession == nullptr) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "An earlier connection's end (%d): not this one's", errorCode);
+        return;
+    }
+    s_ActiveSession->m_PortTestResults = portTestResults;
 
     // Display the termination dialog if this was not intended
     switch (errorCode) {
