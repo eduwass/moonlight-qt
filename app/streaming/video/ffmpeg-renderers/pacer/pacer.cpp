@@ -351,9 +351,13 @@ void Pacer::renderFrame(AVFrame* frame)
     // its swapchain must still be handed back (plvk.cpp holds a lock from
     // waitToRender() until then), which is what cleanupRenderContext() does.
     // Frames not drawn are not counted as drawn.
-    if (chromeUnseen()) {
+    // The first frame after the window went out of sight is drawn all the
+    // same, if the renderer had already got ready for it: handing that
+    // swapchain frame back undrawn shows it empty, and black is then what is
+    // left in the window (its picture in Mission Control, and what is seen on
+    // coming back until the next frame).
+    if (chromeUnseen() && !s_WaitedToRender) {
         m_VsyncRenderer->cleanupRenderContext();
-        s_WaitedToRender = false;
     }
     else {
         if (!s_WaitedToRender && m_RenderThread != nullptr) {
