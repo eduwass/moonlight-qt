@@ -8,10 +8,13 @@
 // So a copy on either side can be pasted on the other, and nothing travels
 // while you stay on one side.
 //
-// Text up to 1 MB, and with a Linux machine pictures up to 20 MB (a screenshot
-// copied on one side pastes on the other).
-// ponytail: no pictures with a Mac in the stream (pbcopy and pbpaste are text
-// only; it would take an AppleScript at that end), and no files.
+// Text up to 1 MB and pictures up to 20 MB (a screenshot copied on one side
+// pastes on the other). On a Linux machine through wl-copy and wl-paste; on a
+// Mac text through pbcopy and pbpaste, and pictures, which those two cannot
+// carry, through an AppleScript one-liner and a temporary file.
+// ponytail: no files.
+
+#include "SDL_compat.h"
 
 #import <Cocoa/Cocoa.h>
 
@@ -95,7 +98,7 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
     NSString* text = [board stringForType:NSPasteboardTypeString];
     NSData* bytes = [text dataUsingEncoding:NSUTF8StringEncoding];
     NSData* picture = nil;
-    if (bytes.length == 0 && s_Linux) {
+    if (bytes.length == 0) {
         // A picture and no text: a screenshot, an image copied from a page.
         text = nil;
         picture = [board dataForType:NSPasteboardTypePNG];
@@ -114,10 +117,13 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
         return;
     }
     // wl-copy stays behind to serve the clipboard, and would hold the pipe open.
-    NSString* command = !s_Linux ? @"/usr/bin/pbcopy" :
-        [k_Wayland stringByAppendingString:picture != nil ? @"wl-copy -t image/png >/dev/null 2>&1" : @"wl-copy >/dev/null 2>&1"];
+    NSString* command = s_Linux ? [k_Wayland stringByAppendingString:picture != nil ? @"wl-copy -t image/png >/dev/null 2>&1" : @"wl-copy >/dev/null 2>&1"] :
+        picture == nil ? @"/usr/bin/pbcopy" :
+        @"f=$(mktemp); cat > $f; osascript -e \"set the clipboard to (read (POSIX file \\\"$f\\\") as «class PNGf»)\"; r=$?; rm -f $f; exit $r";
     dispatch_async(s_Queue, ^{
         bool sent = remote(command, bytes, 0) != nil;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: %s of %lu bytes %s", picture != nil ? "a picture" : "text",
+                    (unsigned long)bytes.length, sent ? "sent" : "could not be sent; it is tried again the next time");
         dispatch_async(dispatch_get_main_queue(), ^{
             // Only once it is over there is it what both sides have. One that
             // did not arrive is tried again the next time this comes to the
@@ -133,6 +139,13 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
     });
 }
 
+- (void)settled
+{
+    if (NSApp.active) {
+        [self toFront:nil];
+    }
+}
+
 // From the front: what was copied there comes back.
 - (void)fromFront:(NSNotification*)note
 {
@@ -143,7 +156,11 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
     NSInteger turn = s_Turn;
     // What it holds, said on a first line: "text" or "png". Text if there is
     // any; a picture only when that is all there is.
-    NSString* command = !s_Linux ? @"echo text; /usr/bin/pbpaste" : [k_Wayland stringByAppendingString:
+    NSString* command = !s_Linux ?
+        @"if /usr/bin/pbpaste | head -c1 | grep -q .; then echo text; /usr/bin/pbpaste; else f=$(mktemp); "
+         "osascript -e \"set d to the clipboard as «class PNGf»\" -e \"set h to open for access POSIX file \\\"$f\\\" with write permission\" "
+         "-e \"write d to h\" -e \"close access h\" >/dev/null 2>&1; if [ -s $f ]; then echo png; cat $f; fi; rm -f $f; fi" :
+        [k_Wayland stringByAppendingString:
         @"t=$(wl-paste -l 2>/dev/null); "
          "if printf '%s\\n' \"$t\" | grep -q '^text/plain'; then echo text; wl-paste -n -t text 2>/dev/null; "
          "elif printf '%s\\n' \"$t\" | grep -qx 'image/png'; then echo png; wl-paste -t image/png 2>/dev/null; fi"];
@@ -171,6 +188,8 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
                     (picture != nil ? [picture isEqualToData:s_BothPicture] : [text isEqualToString:s_Both])) {
                 return;
             }
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: %s of %lu bytes received", picture != nil ? "a picture" : "text",
+                        (unsigned long)(picture != nil ? picture.length : got.length - 5));
             [board clearContents];
             if (picture != nil) {
                 [board setData:picture forType:NSPasteboardTypePNG];
@@ -208,7 +227,10 @@ void clipboardShareStart()
     ClipboardShare* share = [[ClipboardShare alloc] init]; // for as long as the app runs
     [NSNotificationCenter.defaultCenter addObserver:share selector:@selector(toFront:) name:NSApplicationDidBecomeActiveNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:share selector:@selector(fromFront:) name:NSApplicationDidResignActiveNotification object:nil];
+    // The app may have come to the front before this was listening, or may be
+    // about to: look now, and once more when the window has settled.
     if (NSApp.active) {
         [share toFront:nil];
     }
+    [share performSelector:@selector(settled) withObject:nil afterDelay:1.5];
 }

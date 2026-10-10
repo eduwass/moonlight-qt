@@ -70,4 +70,4 @@ The stream itself carries no clipboard, so MoonlightNext passes it over ssh, to 
 - What you copied on your Mac goes to the other machine when you switch to its stream.
 - What you copied there comes back when you switch away from the stream.
 
-So copy on one side, switch, paste on the other. It takes about a tenth of a second. Text up to 1 MB; with a Linux machine also pictures up to 20 MB, so a screenshot copied on one side pastes on the other (with a Mac in the stream it is text only). No files. A password manager's copies marked as concealed are not sent. A Mac is read and written with `pbpaste` and `pbcopy`, a Linux machine with `wl-paste` and `wl-copy` (the `wl-clipboard` package, on Wayland).
+So copy on one side, switch, paste on the other. It takes about a tenth of a second. Text up to 1 MB and pictures up to 20 MB, so a screenshot copied on one side pastes on the other. No files. A password manager's copies marked as concealed are not sent. A Mac is read and written with `pbpaste` and `pbcopy` (and `osascript` for pictures), a Linux machine with `wl-paste` and `wl-copy` (the `wl-clipboard` package, on Wayland).
