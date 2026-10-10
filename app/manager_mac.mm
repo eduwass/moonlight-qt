@@ -358,7 +358,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         localCursor.state = [device[@"localCursor"] boolValue];
         noSound.state = [device[@"noSound"] boolValue];
         // What it is on that kind of machine, so that a pointer that never changes shape is no surprise.
-        localCursor.title = [device[@"system"] isEqualToString:@"linux"] ? @"Instant pointer (plain arrow)" : @"Instant pointer";
+        localCursor.title = @"Instant pointer";
         bitrate.stringValue = [device[@"bitrate"] integerValue] > 0 ? [device[@"bitrate"] stringValue] : @"";
         screenshot.stringValue = device[@"screenshot"] ?: @"";
         before.stringValue = device[@"before"] ?: @"";
@@ -1367,7 +1367,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     NSStackView* sizeRow = [NSStackView stackViewWithViews:@[size, width, label(@"×", 13, NSFontWeightRegular, NSColor.secondaryLabelColor), height]];
     truePixels = [self check:@"True Pixels" tip:@"The stream has as many pixels as the monitor's panel, not as many as macOS draws. Faster on a scaled display."];
     rawColor = [self check:@"Raw colours" tip:@"Show the device's colour values as they are, as its own cable to this monitor would. For a desktop tuned by eye on this monitor."];
-    localCursor = [self check:@"Instant pointer" tip:@"This Mac draws the pointer itself, so it moves with the hand. A Mac with the cursor helper shows its own cursor shapes; a Hyprland PC set up for it shows a plain arrow."];
+    localCursor = [self check:@"Instant pointer" tip:@"This Mac draws the pointer itself, so it moves with the hand. A host with the cursor helper shows its own cursor shapes; without it the pointer is a plain arrow."];
     noSound = [self check:@"No sound" tip:@"Do not play the device's sound here, and do not open this Mac's sound output for the stream. For a device that sends none, or whose sound reaches you another way."];
     NSStackView* checks = [NSStackView stackViewWithViews:@[truePixels, rawColor, localCursor, noSound]];
     checks.spacing = 16;
