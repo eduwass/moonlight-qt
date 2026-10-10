@@ -18,6 +18,7 @@
 
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <signal.h>
 
 static NSString* const k_MoonlightSuite = @"com.moonlight-stream.Moonlight";
 
@@ -144,6 +145,8 @@ static NSTextField* caption(NSString* text)
 
 // ---- Doctor
 
+// What a tool printed by the time limit. The limit holds whatever the tool
+// does: a child of it that keeps the pipe open is not waited for.
 static NSString* runTool(NSString* path, NSArray<NSString*>* arguments, NSTimeInterval limit)
 {
     NSTask* task = [[[NSTask alloc] init] autorelease];
@@ -152,17 +155,32 @@ static NSString* runTool(NSString* path, NSArray<NSString*>* arguments, NSTimeIn
     NSPipe* out = [NSPipe pipe];
     task.standardOutput = out;
     task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    task.standardInput = [NSFileHandle fileHandleWithNullDevice];
     if (![task launchAndReturnError:nil]) {
         return @"";
     }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(limit * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        if (task.running) {
-            [task terminate];
+    NSMutableData* output = [NSMutableData data];
+    dispatch_semaphore_t finished = dispatch_semaphore_create(0);
+    NSFileHandle* reading = out.fileHandleForReading;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSData* all = [reading readDataToEndOfFile];
+        @synchronized (output) {
+            [output appendData:all];
         }
+        dispatch_semaphore_signal(finished);
     });
-    NSData* data = [out.fileHandleForReading readDataToEndOfFile];
-    [task waitUntilExit];
-    return [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease] ?: @"";
+    if (dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(limit * NSEC_PER_SEC))) != 0) {
+        [task terminate];
+        if (dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2)) != 0 && task.running) {
+            kill(task.processIdentifier, SIGKILL);
+        }
+    }
+    dispatch_release(finished);
+    NSString* text;
+    @synchronized (output) {
+        text = [[[NSString alloc] initWithData:output encoding:NSUTF8StringEncoding] autorelease];
+    }
+    return text ?: @"";
 }
 
 static NSString* firstMatch(NSString* text, NSString* pattern)

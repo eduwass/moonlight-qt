@@ -148,6 +148,7 @@ static void tellStream(NSString* name, NSString* what)
     NSMutableDictionary<NSString*, NSImage*>* pictures;       // by device name
     NSMutableDictionary<NSString*, NSDate*>* pictureTimes;
     NSMutableSet<NSString*>* running; // the devices with a stream open or warm, as of the last look
+    NSMutableSet<NSString*>* starting; // the devices whose stream is on its way: one start at a time each
     NSButton* endStream;
     int shooting; // screenshots on their way
 }
@@ -167,7 +168,9 @@ static NSTextField* label(NSString* text, CGFloat size, NSFontWeight weight, NSC
     return field;
 }
 
-// Runs a shell command off the main thread; hands back what it printed.
+// Runs a shell command off the main thread; hands back what it printed by the
+// time limit. The limit holds whatever the command does: a child of it that
+// lives on and keeps the pipe open is not waited for.
 static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSData* output))
 {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -178,18 +181,31 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         task.standardOutput = out;
         task.standardError = [NSFileHandle fileHandleWithNullDevice];
         task.standardInput = [NSFileHandle fileHandleWithNullDevice];
-        NSData* output = nil;
+        NSMutableData* output = [NSMutableData data];
         if ([task launchAndReturnError:nil]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(limit * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                if (task.running) {
-                    [task terminate];
+            dispatch_semaphore_t finished = dispatch_semaphore_create(0);
+            NSFileHandle* reading = out.fileHandleForReading;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                NSData* all = [reading readDataToEndOfFile];
+                @synchronized (output) {
+                    [output appendData:all];
                 }
+                dispatch_semaphore_signal(finished);
             });
-            output = [out.fileHandleForReading readDataToEndOfFile];
-            [task waitUntilExit];
+            if (dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(limit * NSEC_PER_SEC))) != 0) {
+                [task terminate];
+                if (dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2)) != 0 && task.running) {
+                    kill(task.processIdentifier, SIGKILL);
+                }
+            }
+            dispatch_release(finished);
+        }
+        NSData* got;
+        @synchronized (output) {
+            got = [[output copy] autorelease];
         }
         dispatch_async(dispatch_get_main_queue(), ^{
-            done(output);
+            done(got);
         });
     });
 }
@@ -445,14 +461,14 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     device[@"address"] = [address.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
     device[@"system"] = system.indexOfSelectedItem == 1 ? @"linux" : @"mac";
     device[@"fixed"] = @(fixed);
-    if (fixed == wasFixed && width.integerValue >= 320 && height.integerValue >= 200) {
+    if (fixed == wasFixed && width.integerValue >= 320 && height.integerValue >= 200 && width.integerValue <= 8192 && height.integerValue <= 8192) {
         device[fixed ? @"width" : @"windowWidth"] = @(width.integerValue);
         device[fixed ? @"height" : @"windowHeight"] = @(height.integerValue);
     }
     device[@"truePixels"] = @(truePixels.state == NSControlStateValueOn);
     device[@"rawColor"] = @(rawColor.state == NSControlStateValueOn);
     device[@"localCursor"] = @(localCursor.state == NSControlStateValueOn);
-    device[@"bitrate"] = @(MAX(0, bitrate.integerValue));
+    device[@"bitrate"] = @(MIN(500000, MAX(0, bitrate.integerValue)));
     device[@"screenshot"] = screenshot.stringValue;
     device[@"before"] = before.stringValue;
     saveDevices();
@@ -515,6 +531,9 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
             if (app != nil && deviceName != nil) {
                 [running addObject:deviceName];
             }
+            if (deviceName != nil) {
+                [starting removeObject:deviceName];
+            }
             connect.enabled = YES;
             [table reloadData];
             [self show];
@@ -535,14 +554,29 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     if (device == nil || [device[@"address"] length] == 0) {
         return;
     }
+    if ([starting containsObject:deviceName]) {
+        return; // a second press, or a second link, while the first is at work
+    }
     if (streamRuns(deviceName)) {
         tellStream(deviceName, @"show");
         return;
     }
+    [starting addObject:deviceName];
     connect.enabled = NO;
     statusLine.stringValue = [device[@"before"] length] > 0 ? @"Waking it…" : @"Connecting…";
 
     void (^go)(NSString*) = ^(NSString* at) {
+        // Removed from the list while its "before connecting" command ran: then not.
+        bool stillThere = false;
+        for (NSDictionary* each in s_Devices) {
+            stillThere |= [each[@"name"] isEqual:deviceName];
+        }
+        if (!stillThere) {
+            [starting removeObject:deviceName];
+            connect.enabled = YES;
+            [self show];
+            return;
+        }
         // Moonlight tries the address it last saw the host at before the one it
         // is given; make them the same (see remote-mbp.sh for how that went wrong).
         NSString* prefix = device[@"host"] != nil ? moonlightHostPrefix(device[@"host"]) : nil;
@@ -636,10 +670,15 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     }
     NSString* wanted = parts.path.length > 1 ? [parts.path substringFromIndex:1] : @"";
     NSMutableDictionary* device = nil;
-    for (NSDictionary* each in s_Devices) {
-        if ([each[@"name"] caseInsensitiveCompare:wanted] == NSOrderedSame || [each[@"address"] caseInsensitiveCompare:wanted] == NSOrderedSame ||
-                [each[@"host"] caseInsensitiveCompare:wanted] == NSOrderedSame) {
-            device = [[each mutableCopy] autorelease];
+    // By name first, then by address or the name Moonlight has for it. (A
+    // device added by hand has no such name, and comparing against nothing
+    // would call it a match.)
+    for (NSString* key in @[@"name", @"address", @"host"]) {
+        for (NSDictionary* each in s_Devices) {
+            NSString* value = each[key];
+            if (device == nil && wanted.length > 0 && value.length > 0 && [value caseInsensitiveCompare:wanted] == NSOrderedSame) {
+                device = [[each mutableCopy] autorelease];
+            }
         }
     }
     if (device == nil) {
@@ -650,26 +689,41 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         [alert beginSheetModalForWindow:window completionHandler:nil];
         return NO;
     }
+    // A link comes from anywhere: whole numbers only, and within what a stream can be.
+    NSInteger (^number)(NSString*, NSInteger, NSInteger) = ^NSInteger(NSString* text, NSInteger least, NSInteger most) {
+        if (text.length == 0 || text.length > 6 || [text rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound) {
+            return -1;
+        }
+        NSInteger value = text.integerValue;
+        return value >= least && value <= most ? value : -1;
+    };
     for (NSURLQueryItem* item in parts.queryItems) {
         NSArray<NSString*>* size = [item.value.lowercaseString componentsSeparatedByString:@"x"];
-        bool isSize = size.count == 2 && size[0].integerValue >= 320 && size[1].integerValue >= 200;
-        bool on = item.value.boolValue || [item.value isEqualToString:@"on"];
+        NSInteger w = size.count == 2 ? number(size[0], 320, 8192) : -1, h = size.count == 2 ? number(size[1], 200, 8192) : -1;
+        bool isSize = w > 0 && h > 0;
+        bool on = [item.value isEqualToString:@"1"] || [item.value isEqualToString:@"on"] || [item.value isEqualToString:@"true"];
         if ([item.name isEqualToString:@"size"] && isSize) {
-            device[@"windowWidth"] = @(size[0].integerValue);
-            device[@"windowHeight"] = @(size[1].integerValue);
+            device[@"windowWidth"] = @(w);
+            device[@"windowHeight"] = @(h);
         }
         else if ([item.name isEqualToString:@"fixed"]) {
             device[@"fixed"] = @(isSize || on);
             if (isSize) {
-                device[@"width"] = @(size[0].integerValue);
-                device[@"height"] = @(size[1].integerValue);
+                device[@"width"] = @(w);
+                device[@"height"] = @(h);
             }
         }
         else if ([item.name isEqualToString:@"truepixels"]) device[@"truePixels"] = @(on);
         else if ([item.name isEqualToString:@"raw"]) device[@"rawColor"] = @(on);
         else if ([item.name isEqualToString:@"pointer"]) device[@"localCursor"] = @(on);
-        else if ([item.name isEqualToString:@"bitrate"]) device[@"bitrate"] = @(MAX(0, item.value.integerValue));
-        else if ([item.name isEqualToString:@"fps"]) device[@"fps"] = @(MAX(0, item.value.integerValue));
+        else if ([item.name isEqualToString:@"bitrate"]) {
+            NSInteger kbps = [item.value isEqualToString:@"0"] ? 0 : number(item.value, 500, 500000);
+            if (kbps >= 0) device[@"bitrate"] = @(kbps);
+        }
+        else if ([item.name isEqualToString:@"fps"]) {
+            NSInteger rate = number(item.value, 10, 240);
+            if (rate > 0) device[@"fps"] = @(rate);
+        }
     }
     [self start:device];
     return YES;
@@ -701,6 +755,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     pictures = [[NSMutableDictionary alloc] init];
     pictureTimes = [[NSMutableDictionary alloc] init];
     running = [[NSMutableSet alloc] init];
+    starting = [[NSMutableSet alloc] init];
 
     window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 940, 700)
                                          styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |

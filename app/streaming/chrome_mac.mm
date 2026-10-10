@@ -753,14 +753,13 @@ static bool chromeTakes(int key, bool down, int sdlMods)
 static ChromeWarm* s_Warm;
 
 @implementation ChromeWarm
-- (void)finish
+// The window it was set up for may be gone: a session can end by itself while
+// its window is out of sight, and this object stays for the next one.
+- (bool)live
 {
-    SDL_Event event;
-    event.type = SDL_QUIT;
-    event.quit.timestamp = SDL_GetTicks();
-    SDL_PushEvent(&event);
+    return window != nil && [NSApp.windows containsObject:window];
 }
-- (void)show
+- (void)rest
 {
     [end invalidate];
     end = nil;
@@ -769,12 +768,41 @@ static ChromeWarm* s_Warm;
         [awake release];
         awake = nil;
     }
+}
+- (void)finish
+{
+    [self rest];
+    hidden = false;
+    SDL_Event event;
+    event.type = SDL_QUIT;
+    event.quit.timestamp = SDL_GetTicks();
+    SDL_PushEvent(&event);
+}
+- (void)timeUp:(NSTimer*)timer
+{
+    end = nil; // it has fired, and is the run loop's to release
+    [self finish];
+}
+// asked: someone wants the window, so it comes forward whatever state it is in.
+- (void)show:(bool)asked
+{
+    [self rest];
+    if (![self live]) {
+        hidden = false;
+        return;
+    }
     if (hidden) {
         hidden = false;
         SDL_DisableScreenSaver(); // as Moonlight has it while its stream shows
-        [window makeKeyAndOrderFront:nil];
-        [NSApp activateIgnoringOtherApps:YES];
     }
+    else if (!asked) {
+        return;
+    }
+    if (window.miniaturized) {
+        [window deminiaturize:nil];
+    }
+    [window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
 }
 - (void)closeAsked:(id)sender
 {
@@ -794,24 +822,26 @@ static ChromeWarm* s_Warm;
                                                           reason:@"A stream kept warm out of sight"] retain];
     [NSApp hide:nil];
     if (seconds > 0) {
-        end = [NSTimer scheduledTimerWithTimeInterval:seconds target:self selector:@selector(finish) userInfo:nil repeats:NO];
+        end = [NSTimer scheduledTimerWithTimeInterval:seconds target:self selector:@selector(timeUp:) userInfo:nil repeats:NO];
     }
 }
 - (void)becameActive:(NSNotification*)note
 {
-    [self show];
+    if (hidden) {
+        [self show:false];
+    }
 }
 - (void)told:(NSNotification*)note
 {
     const char* device = getenv("MOONLIGHT_DEVICE");
-    if (device == nullptr || ![note.object isEqual:@(device)]) {
+    if (device == nullptr || ![note.object isEqual:@(device)] || ![self live]) {
         return;
     }
     if ([note.userInfo[@"do"] isEqual:@"end"]) {
         [self finish];
     }
     else {
-        [self show];
+        [self show:true];
     }
 }
 @end
@@ -885,8 +915,7 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         [NSDistributedNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(told:) name:@"dev.eduwass.moonlight-next.stream" object:nil
                                                 suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
     }
-    [s_Warm->end invalidate];
-    s_Warm->end = nil;
+    [s_Warm rest]; // whatever the last session left: its timer, its hold on App Nap
     s_Warm->hidden = false;
     s_Warm->window = w;
     s_Lights[0].target = s_Warm;
