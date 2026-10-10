@@ -70,6 +70,14 @@ static NSTextField* caption(NSString* text)
     preset.selectedSegment = kbps == 0 && fps == 0 ? 0 : kbps == 40000 && fps == 0 ? 1 : kbps == 15000 && fps == 30 ? 2 : -1;
 }
 
+// The settings as they are saved now: another of the app's processes (the
+// device window, another stream) may have changed them since this was shown,
+// and the next change made here writes every control's value.
+- (void)refresh
+{
+    [self show];
+}
+
 - (void)changed:(id)sender
 {
     NSUserDefaults* ours = NSUserDefaults.standardUserDefaults;
@@ -417,6 +425,11 @@ static Diagnosis examine(NSDictionary* device)
     });
 }
 
+- (void)refresh
+{
+    [self fill]; // devices added, renamed or removed since
+}
+
 - (void)examine:(NSString*)device
 {
     [self fill];
@@ -492,6 +505,10 @@ static Diagnosis examine(NSDictionary* device)
 - (void)changed:(id)sender
 {
     [NSUserDefaults.standardUserDefaults setInteger:warm.selectedItem.tag forKey:@"WarmSeconds"];
+}
+- (void)refresh
+{
+    [warm selectItemWithTag:[NSUserDefaults.standardUserDefaults integerForKey:@"WarmSeconds"]];
 }
 - (instancetype)initWithFrame:(NSRect)frame
 {

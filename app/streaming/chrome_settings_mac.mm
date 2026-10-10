@@ -19,13 +19,17 @@ static NSString* const k_Saved = @"ChromeKeys";
 
 static ChromeBinding s_Bindings[KEY_COUNT];
 
+// Read again when two seconds have gone by: another of the app's processes
+// may have changed them (every stream is one, and the device window), and a
+// change made here saves them all.
 static void load()
 {
-    static bool loaded;
-    if (loaded) {
+    static CFAbsoluteTime loadedAt;
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (loadedAt != 0 && now - loadedAt < 2) {
         return;
     }
-    loaded = true;
+    loadedAt = now;
     memcpy(s_Bindings, k_Defaults, sizeof(s_Bindings));
     NSArray* saved = [NSUserDefaults.standardUserDefaults arrayForKey:k_Saved];
     for (NSUInteger i = 0; saved.count == KEY_COUNT * 2 && i < KEY_COUNT; i++) {
@@ -249,9 +253,18 @@ static NSString* const k_PaneSymbols[PANE_COUNT] = {@"gearshape", @"dial.medium"
         }
     }
 }
+- (void)refreshPanes
+{
+    for (int i = 0; i < PANE_COUNT; i++) {
+        if ([panes[i] respondsToSelector:@selector(refresh)]) {
+            [panes[i] performSelector:@selector(refresh)];
+        }
+    }
+}
 - (void)choose:(int)which
 {
     pane = which;
+    [self refreshPanes];
     for (NSView* view in keyViews) {
         view.hidden = pane != PANE_KEYS;
     }
@@ -370,6 +383,7 @@ void chromeSettingsOpen(const char* host)
     ChromeSettingsView* view = (ChromeSettingsView*)window.contentView;
     [view->host release];
     view->host = [@(host) retain];
+    [view refreshPanes]; // as things are saved now, not as they were when it was last open
     view.needsDisplay = YES;
     [NSApp activateIgnoringOtherApps:YES];
     [window makeKeyAndOrderFront:nil];
