@@ -25,7 +25,7 @@ docs=$(sed -n '/^## What a connect link can say/,/^## /p' site/docs/05-links.mdx
 for v in $(grep -h -o -E '"MOONLIGHT_[A-Z_]+"' -r app --include=*.cpp --include=*.mm --include=*.h | tr -d '"' | sort -u); do
   grep -q -r "$v" site/docs || case "$v" in
     # Set by the app for its own stream processes, or left over from experiments; not for a person to set.
-    MOONLIGHT_DEVICE|MOONLIGHT_CHROMELESS|MOONLIGHT_GAMES_WARNING) ;;
+    MOONLIGHT_DEVICE|MOONLIGHT_CHROMELESS|MOONLIGHT_GAMES_WARNING|MOONLIGHT_RETRIED) ;;
     *) bad "$v is read by the code and not mentioned in site/docs" ;;
   esac
 done

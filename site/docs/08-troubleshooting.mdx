@@ -31,6 +31,10 @@ Open the bar and rest on the connection. If it says Wi-Fi or Tailscale where you
 
 The stream's size does not match the window's pixels. Check that **Follow size** is on, or that a fixed size is what you meant. On a Linux host, check that its output has the stream's size (`hyprctl monitors`): a configuration reload resets a virtual output unless the watcher from [Hosts](/hosts) is running.
 
+## "The stream could not be started"
+
+A stream that the other machine takes and then drops in its first half minute is tried once more by itself, three seconds later, before anything is said: that covers a host that was just restarting, or still ending the stream before. If you see the message, the second try failed too. Look at whether Sunshine is running on the other machine, then at the ports the message names.
+
 ## A warm stream is gone
 
 Its time ran out (Settings › General), the host ended the session, or your Mac slept.

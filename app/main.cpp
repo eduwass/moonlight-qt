@@ -13,12 +13,14 @@
 #include <QFont>
 #include <QCursor>
 #include <QElapsedTimer>
+#include <QTimer>
 #include <QTemporaryFile>
 #include <QRegularExpression>
 
 #ifdef Q_OS_UNIX
 #include <sys/socket.h>
 #include <signal.h>
+#include <unistd.h>
 #endif
 
 // Don't let SDL hook our main function, since Qt is already
@@ -472,7 +474,9 @@ public:
 
     void run()
     {
+        m_Started.start();
         connect(m_Launcher, &CliStartStream::Launcher::sessionCreated, this, [this](QString, Session* session) {
+            m_Session = true;
             connect(session, &Session::stageFailed, this, [this](QString stage, int errorCode, QString failingPorts) {
                 m_Error = QStringLiteral("Starting %1 failed: error %2.").arg(stage).arg(errorCode);
                 if (!failingPorts.isEmpty()) {
@@ -508,8 +512,38 @@ public:
 private:
     void finish()
     {
+        if (m_Again) {
+            return; // on its way to being started again
+        }
         if (!m_Error.isEmpty()) {
             qWarning() << m_Error;
+            // A stream that the host took and then dropped as it started (seen
+            // with a host that was restarting, or still ending the stream
+            // before): once more, a moment later, as this same process, which
+            // is the one the device window knows. MOONLIGHT_RETRIED says it has
+            // been done, with the process it was done by: a process started
+            // from this one inherits it, and is another.
+            const QByteArray self = QByteArray::number((qlonglong)QCoreApplication::applicationPid());
+            if (m_Session && m_Started.elapsed() < 30000 && qgetenv("MOONLIGHT_RETRIED") != self) {
+                qWarning() << "The stream ended as it started: trying once more";
+                qputenv("MOONLIGHT_RETRIED", self);
+                m_Again = true;
+                QTimer::singleShot(3000, this, [this] {
+                    QList<QByteArray> arguments;
+                    for (const QString& argument : QCoreApplication::arguments()) {
+                        arguments.append(argument.toLocal8Bit());
+                    }
+                    QVector<char*> argv;
+                    for (QByteArray& argument : arguments) {
+                        argv.append(argument.data());
+                    }
+                    argv.append(nullptr);
+                    execv(QCoreApplication::applicationFilePath().toLocal8Bit().constData(), argv.data());
+                    managerAlert(m_Error.toUtf8().constData()); // still here: it could not be done
+                    QCoreApplication::quit();
+                });
+                return;
+            }
             managerAlert(m_Error.toUtf8().constData());
         }
         QCoreApplication::quit();
@@ -517,6 +551,9 @@ private:
 
     CliStartStream::Launcher* m_Launcher;
     QString m_Error;
+    QElapsedTimer m_Started;
+    bool m_Session = false; // the host was reached and a stream asked for
+    bool m_Again = false;
 };
 #endif
 
