@@ -769,6 +769,7 @@ static std::atomic<bool> s_Unseen, s_Covered;
 // is off waits a second for every frame: the frames pile up undrawn ("decode
 // unit queue overflow", seen all through a stream started in that state).
 static std::atomic<bool> s_Away;
+static std::atomic<bool> s_SessionOver; // the stream's session has ended, for good
 
 // Locked, or every display asleep. (Every one, not the main one: the stream's
 // window may be on another, and that one awake.)
@@ -821,6 +822,7 @@ void chromeConnection(bool up)
 
 void chromeSessionEnding()
 {
+    s_SessionOver = true;
     const char* device = getenv("MOONLIGHT_DEVICE");
     if (device != nullptr) {
         [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.gone" object:@(device)
@@ -1029,7 +1031,16 @@ bool chromeUnseen()
 - (void)told:(NSNotification*)note
 {
     const char* device = getenv("MOONLIGHT_DEVICE");
-    if (device == nullptr || ![note.object isEqual:@(device)] || ![self live]) {
+    if (device == nullptr || ![note.object isEqual:@(device)]) {
+        return;
+    }
+    // Told to end with its session over already: it is waiting to be tried
+    // once more (main.cpp), and is not to be.
+    if (s_SessionOver && [note.userInfo[@"do"] isEqual:@"end"]) {
+        [NSApp terminate:nil];
+        return;
+    }
+    if (![self live]) {
         return;
     }
     if ([note.userInfo[@"do"] isEqual:@"end"]) {

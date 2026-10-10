@@ -52,11 +52,22 @@ static NSInteger s_Sending = -1; // the change count of what is on its way over,
 static NSData* remote(NSString* command, NSData* input, NSUInteger most, NSUInteger seconds)
 {
     NSTask* task = [[[NSTask alloc] init] autorelease];
-    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/ssh"];
     // One connection is kept and used again: a new one costs a third of a second.
-    task.arguments = @[@"-o", @"BatchMode=yes", @"-o", @"ConnectTimeout=4", @"-o", @"ServerAliveInterval=2", @"-o", @"ServerAliveCountMax=2", @"-o", @"ControlMaster=auto",
+    NSArray<NSString*>* ssh = @[@"/usr/bin/ssh", @"-o", @"BatchMode=yes", @"-o", @"ConnectTimeout=4", @"-o", @"ServerAliveInterval=2", @"-o", @"ServerAliveCountMax=2", @"-o", @"ControlMaster=auto",
                        @"-o", [NSString stringWithFormat:@"ControlPath=%@/.ssh/cm-%%C", NSHomeDirectory()], @"-o", @"ControlPersist=600",
                        @"--", s_Destination, command];
+    // Its time is up whether or not this process is still there to say so
+    // (below): a stream that ends, or is replaced by its second try, with a
+    // command hung at the other end would leave ssh waiting for good. The
+    // alarm is set before ssh takes the process's place, and stays set.
+    if ([NSFileManager.defaultManager isExecutableFileAtPath:@"/usr/bin/perl"]) {
+        task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/perl"];
+        task.arguments = [@[@"-e", @"alarm shift; exec @ARGV", [NSString stringWithFormat:@"%lu", (unsigned long)seconds + 5]] arrayByAddingObjectsFromArray:ssh];
+    }
+    else {
+        task.executableURL = [NSURL fileURLWithPath:ssh[0]];
+        task.arguments = [ssh subarrayWithRange:NSMakeRange(1, ssh.count - 1)];
+    }
     NSPipe* in = [NSPipe pipe];
     NSPipe* out = [NSPipe pipe];
     task.standardInput = in;
@@ -155,6 +166,11 @@ static NSData* pack(NSArray<NSURL*>* files)
         [arguments addObjectsFromArray:@[@"-C", file.path.stringByDeletingLastPathComponent, [@"./" stringByAppendingString:file.lastPathComponent]]];
     }
     task.arguments = arguments;
+    // Without what a Mac keeps beside a file (its "._name" twin in the
+    // archive): at the other end that is one more file, of no use there.
+    NSMutableDictionary* environment = [[NSProcessInfo.processInfo.environment mutableCopy] autorelease];
+    environment[@"COPYFILE_DISABLE"] = @"1";
+    task.environment = environment;
     NSPipe* out = [NSPipe pipe];
     task.standardInput = [NSFileHandle fileHandleWithNullDevice];
     task.standardOutput = out;
@@ -315,7 +331,7 @@ static NSString* const k_LinuxListFiles = @(R"SH(l=$(wl-paste -l 2>/dev/null | g
 static NSString* const k_SendFilesOr = @(R"SH(set --; n=0; bad=0; while IFS= read -r f; do [ -n "$f" ] || continue; [ -f "$f" ] || { bad=1; continue; }; n=$((n + $(wc -c < "$f"))); set -- "$@" -C "$(dirname "$f")" "./$(basename "$f")"; done <<LIST
 $l
 LIST
-if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then echo files; tar -cf - "$@"; exit; fi; [ -z "$l" ] || exit 0; )SH");
+if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then echo files; COPYFILE_DISABLE=1 tar -cf - "$@"; exit; fi; [ -z "$l" ] || exit 0; )SH");
 
 @interface ClipboardShare : NSObject
 @end
@@ -519,7 +535,8 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
     NSCharacterSet* plain = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789%_"];
     NSString* device = [[given componentsSeparatedByCharactersInSet:plain.invertedSet] componentsJoinedByString:@"_"];
     if (device.length == 0 || device.length > 100) {
-        device = @"stream";
+        // (Still its own: two devices with long names are two folders.)
+        device = [NSString stringWithFormat:@"stream%lx", (unsigned long)given.hash];
     }
     static long arrivals; // only ever here, on the one queue
     // (The folder they are unpacked into is this arrival's own: what is done
