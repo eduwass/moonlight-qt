@@ -1,3 +1,4 @@
+#include "streaming/chrome.h"
 #include <Limelight.h>
 #include "SDL_compat.h"
 #include "streaming/session.h"
@@ -357,7 +358,7 @@ void SdlInputHandler::setCaptureActive(bool active)
         // If we're in relative mode, try to activate SDL's relative mouse mode
         if (m_AbsoluteMouseMode || SDL_SetRelativeMouseMode(SDL_TRUE) < 0) {
             // Relative mouse mode didn't work or was disabled, so we'll just hide the cursor
-            SDL_ShowCursor(m_MouseCursorCapturedVisibilityState);
+            SDL_ShowCursor(cursorShareWaiting() ? SDL_DISABLE : m_MouseCursorCapturedVisibilityState);
             m_FakeMouseCaptureActive = true;
         }
 

@@ -28,6 +28,8 @@
 void chromeSettingsOpen(const char* host);
 void chromeSettingsDoctor(const char* device);
 
+static NSMutableDictionary* plainEnvironment();
+double dynresScreenPanelScale(NSScreen* screen); // dynres_mac.mm
 static NSString* const k_Devices = @"Devices";
 static NSString* const k_MoonlightSuite = @"com.moonlight-stream.Moonlight";
 
@@ -674,6 +676,13 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     }];
 }
 
+- (void)passedOn:(NSNotification*)note
+{
+    if ([note.object isKindOfClass:[NSString class]]) {
+        managerOpenUrl([note.object UTF8String]);
+    }
+}
+
 - (void)streamUp:(NSNotification*)note
 {
     if ([note.object isKindOfClass:[NSString class]]) {
@@ -686,7 +695,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     NSWorkspaceOpenConfiguration* configuration = [NSWorkspaceOpenConfiguration configuration];
     configuration.createsNewApplicationInstance = YES;
     configuration.arguments = arguments;
-    NSMutableDictionary* all = [[NSProcessInfo.processInfo.environment mutableCopy] autorelease];
+    NSMutableDictionary* all = plainEnvironment();
     [all addEntriesFromDictionary:environment];
     configuration.environment = all;
     [NSWorkspace.sharedWorkspace openApplicationAtURL:NSBundle.mainBundle.bundleURL configuration:configuration
@@ -756,10 +765,28 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         }
 
         bool fixed = [device[@"fixed"] boolValue], linux = [device[@"system"] isEqualToString:@"linux"];
-        CGFloat scale = window.screen.backingScaleFactor ?: 2;
         NSInteger w = [device[@"windowWidth"] integerValue] ?: 1920, h = [device[@"windowHeight"] integerValue] ?: 1080;
-        NSInteger pw = fixed ? [device[@"width"] integerValue] ?: 3840 : (NSInteger)(w * scale);
-        NSInteger ph = fixed ? [device[@"height"] integerValue] ?: 2160 : (NSInteger)(h * scale);
+        // The screen the stream's window will be on: where it was left, else the main one.
+        NSScreen* target = NSScreen.mainScreen;
+        if (device[@"windowLeft"] != nil && device[@"windowTop"] != nil) {
+            NSRect left = NSMakeRect([device[@"windowLeft"] integerValue], [device[@"windowTop"] integerValue] - h, w, h);
+            for (NSScreen* screen in NSScreen.screens) {
+                NSRect showing = NSIntersectionRect(screen.visibleFrame, left);
+                if (showing.size.width >= 200 && showing.size.height >= 100) {
+                    target = screen;
+                }
+            }
+        }
+        // Pixels for points; with True Pixels only as many as the panel has
+        // of them (dynres.cpp does the same sum for the window once it is
+        // there, and a different answer here made every such stream start
+        // twice and its window grow by a quarter each time).
+        CGFloat scale = target.backingScaleFactor ?: 2;
+        if (!fixed && [device[@"truePixels"] boolValue]) {
+            scale *= dynresScreenPanelScale(target);
+        }
+        NSInteger pw = fixed ? [device[@"width"] integerValue] ?: 3840 : ((NSInteger)(w * scale + 0.5) & ~1);
+        NSInteger ph = fixed ? [device[@"height"] integerValue] ?: 2160 : ((NSInteger)(h * scale + 0.5) & ~1);
         NSString* rule = [device[@"fpsRule"] length] > 0 ? device[@"fpsRule"] : linux ? @"11059200:50:60" : @"8294400:40:60";
         NSArray<NSString*>* parts = [rule componentsSeparatedByString:@":"];
         NSInteger fps = parts.count == 3 ? (pw * ph > [parts[0] integerValue] ? [parts[1] integerValue] : [parts[2] integerValue]) : 60;
@@ -1206,12 +1233,61 @@ static bool s_OpenedByLink;
 static NSDate* s_StartedAt;
 static NSDate* s_LinkAt; // when the last link to a device came
 
+// This process's environment without what was set for one stream: a process
+// started from here must not take another device's switches for its own.
+static NSMutableDictionary* plainEnvironment()
+{
+    NSMutableDictionary* all = [[NSProcessInfo.processInfo.environment mutableCopy] autorelease];
+    for (NSString* key in @[@"DEVICE", @"CHROME", @"FPS_ABOVE", @"WINDOW", @"WINDOW_AT", @"WINDOW_ONCE", @"FOLLOW", @"PANEL_PIXELS",
+                            @"RAW_COLOR", @"LOCAL_CURSOR", @"CLIPBOARD", @"OPEN_URL", @"CLASSIC"]) {
+        [all removeObjectForKey:[@"MOONLIGHT_" stringByAppendingString:key]];
+    }
+    return all;
+}
+
+void managerForwardUrl(const char* url)
+{
+    NSString* link = @(url);
+    // Is there a process with the app's own window? It is the one started with no arguments.
+    NSTask* look = [[[NSTask alloc] init] autorelease];
+    look.executableURL = [NSURL fileURLWithPath:@"/usr/bin/pgrep"];
+    look.arguments = @[@"-f", [NSString stringWithFormat:@"^%@$", [NSRegularExpression escapedPatternForString:NSBundle.mainBundle.executablePath]]];
+    look.standardOutput = [NSFileHandle fileHandleWithNullDevice];
+    bool there = [look launchAndReturnError:nil];
+    if (there) {
+        [look waitUntilExit];
+        there = look.terminationStatus == 0;
+    }
+    if (there) {
+        [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.open" object:link
+                                                                    userInfo:nil deliverImmediately:YES];
+        return;
+    }
+    NSWorkspaceOpenConfiguration* configuration = [NSWorkspaceOpenConfiguration configuration];
+    configuration.createsNewApplicationInstance = YES;
+    NSMutableDictionary* environment = plainEnvironment();
+    environment[@"MOONLIGHT_OPEN_URL"] = link; // read in managerStart
+    configuration.environment = environment;
+    [NSWorkspace.sharedWorkspace openApplicationAtURL:NSBundle.mainBundle.bundleURL configuration:configuration completionHandler:nil];
+}
+
 void managerStart()
 {
     s_StartedAt = [[NSDate date] retain];
     loadDevices();
     s_Manager = [[ManagerController alloc] init];
     [s_Manager build];
+    // A link that came to a stream's process is passed on: by a notification
+    // if this process was there, in the environment if it was started for it.
+    [NSDistributedNotificationCenter.defaultCenter addObserver:s_Manager selector:@selector(passedOn:) name:@"dev.eduwass.moonlight-next.open" object:nil
+                                            suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
+    if (getenv("MOONLIGHT_OPEN_URL") != nullptr) {
+        NSString* link = @(getenv("MOONLIGHT_OPEN_URL"));
+        unsetenv("MOONLIGHT_OPEN_URL");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            managerOpenUrl(link.UTF8String);
+        });
+    }
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     // Settings… with ⌘, in the app's menu, where a Mac app has it. (Qt makes
     // that menu when its loop starts, so this waits a turn.)

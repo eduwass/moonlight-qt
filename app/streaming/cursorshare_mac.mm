@@ -12,6 +12,7 @@
 // Sizes are in points; the PNG may hold more pixels than that (a 2x cursor).
 
 #include "SDL_compat.h"
+#include "chrome.h"
 
 #import <Cocoa/Cocoa.h>
 
@@ -30,6 +31,8 @@
 static char s_Host[64]; // the host we stream from; only it may set our cursor
 static void* s_Cursor;  // an SDL 3 cursor; main thread only
 static SDL_atomic_t s_Listening;
+static SDL_atomic_t s_Connected; // the host's helper is on the line
+static bool s_Plain;             // a host with no helper: a plain arrow, and nothing to wait for
 
 // ponytail: the SDL 2 we link is sdl2-compat, a layer over SDL 3, and the SDL 2
 // calls make cursors of one pixel per point: blurry on a 2x screen. SDL 3 takes
@@ -197,15 +200,35 @@ static int listenForCursors(void*)
             continue;
         }
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Cursor shapes: connected from %s", from);
+        // From here the host leaves its cursor out of the picture, and ours
+        // is the one to see; when the helper goes, the other way round.
+        SDL_AtomicSet(&s_Connected, 1);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SDL_ShowCursor(SDL_ENABLE);
+        });
         @autoreleasepool {
             serve(fd);
         }
+        SDL_AtomicSet(&s_Connected, 0);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (cursorShareWaiting()) {
+                SDL_ShowCursor(SDL_DISABLE);
+            }
+        });
     }
+}
+
+bool cursorShareWaiting()
+{
+    return getenv("MOONLIGHT_LOCAL_CURSOR") != nullptr && !s_Plain && SDL_AtomicGet(&s_Connected) == 0;
 }
 
 // Called on the main thread when a session starts.
 void cursorShareStart(const char* host)
 {
+    // A Linux host has no helper (see the hosts page): its cursor is hidden by
+    // its own prep command, and the pointer here is a plain arrow at once.
+    s_Plain = getenv("MOONLIGHT_CHROME") != nullptr && strstr(getenv("MOONLIGHT_CHROME"), "linux") != nullptr;
     SDL_strlcpy(s_Host, host, sizeof(s_Host));
     // SDL destroyed the last session's cursors when it shut its video down.
     s_Cursor = nullptr;

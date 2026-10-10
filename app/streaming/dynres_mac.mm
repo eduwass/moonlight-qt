@@ -154,6 +154,8 @@ void dynresBusy(SDL_Window* window, bool busy)
 // How much of what macOS draws on the window's screen the panel really has, per
 // axis: 1 on a display running at its own resolution, 0.8 for "looks like
 // 3200x1350" on a 5120x2160 panel (drawn at 6400x2700).
+double dynresScreenPanelScale(NSScreen* screen);
+
 double dynresPanelScale(SDL_Window* window)
 {
     SDL_SysWMinfo info;
@@ -161,9 +163,14 @@ double dynresPanelScale(SDL_Window* window)
     if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_COCOA) {
         return 1;
     }
+    return dynresScreenPanelScale(info.info.cocoa.window.screen ?: NSScreen.mainScreen);
+}
 
+// The same for a screen: the device window asks before there is a stream window,
+// so that a True Pixels stream starts at its size and not at one to be corrected.
+double dynresScreenPanelScale(NSScreen* screen)
+{
     @autoreleasepool {
-        NSScreen* screen = info.info.cocoa.window.screen ?: NSScreen.mainScreen;
         CGDirectDisplayID display = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
 
         CGDisplayModeRef current = CGDisplayCopyDisplayMode(display);

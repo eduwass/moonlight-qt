@@ -7,6 +7,10 @@ void managerStart();
 // A moonlightnext:// link was opened (manager_mac.mm lists what one can say).
 void managerOpenUrl(const char* url);
 
+// The same, when it came to a stream's process: passed on to the process with
+// the app's own window, which is started if there is none.
+void managerForwardUrl(const char* url);
+
 // The Dock icon was clicked with no window showing.
 void managerShow();
 

@@ -440,6 +440,24 @@ public:
 };
 #endif
 
+#ifdef Q_OS_DARWIN
+// Fork: a link can come to a stream's process too (they are the same app, and
+// macOS picks one): it is passed on to the device window's process.
+class StreamLinkEvents : public QObject
+{
+public:
+    using QObject::QObject;
+    bool eventFilter(QObject* object, QEvent* event) override
+    {
+        if (event->type() == QEvent::FileOpen) {
+            managerForwardUrl(static_cast<QFileOpenEvent*>(event)->url().toString(QUrl::FullyEncoded).toUtf8().constData());
+            return true;
+        }
+        return QObject::eventFilter(object, event);
+    }
+};
+#endif
+
 int main(int argc, char *argv[])
 {
     SDL_SetMainReady();
@@ -1026,6 +1044,9 @@ int main(int argc, char *argv[])
     case GlobalCommandLineParser::StreamRequested:
         {
             initialView = "qrc:/gui/CliStartStreamSegue.qml";
+#ifdef Q_OS_DARWIN
+            app.installEventFilter(new StreamLinkEvents(&app));
+#endif
             StreamingPreferences* preferences = StreamingPreferences::get();
             StreamCommandLineParser streamParser;
             streamParser.parse(app.arguments(), preferences);

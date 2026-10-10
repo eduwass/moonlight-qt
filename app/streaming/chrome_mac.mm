@@ -19,10 +19,12 @@ void clipboardShareStart(); // clipboard_mac.mm
 
 #include "SDL_compat.h"
 #include <SDL_syswm.h>
+#include <Limelight.h>
 
 #import <Cocoa/Cocoa.h>
 
 #include <atomic>
+#include <dlfcn.h>
 #include <initializer_list>
 #include <set>
 #include <vector>
@@ -818,6 +820,7 @@ bool chromeUnseen()
     }
     [window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+    [self moved:nil]; // a new picture: none was drawn while it was away
 }
 - (void)closeAsked:(id)sender
 {
@@ -873,7 +876,41 @@ bool chromeUnseen()
 - (void)coverChanged:(NSNotification*)note
 {
     if (note.object == window) {
-        s_Covered = !(window.occlusionState & NSWindowOcclusionStateVisible);
+        bool covered = !(window.occlusionState & NSWindowOcclusionStateVisible);
+        if (covered != s_Covered) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, covered ? "The window is out of sight: frames are not drawn" : "The window is in sight again");
+        }
+        s_Covered = covered;
+        if (!covered) {
+            [self fresh];
+        }
+    }
+}
+// The window is to be looked at again, or has a new place to be looked at in
+// (another Space, fullscreen): ask the host for a whole new picture. While it
+// was out of sight nothing was drawn, and a host whose screen is still sends
+// nothing new by itself: the window would stay as it was left, or black, until
+// something moved over there. (With the instant pointer not even the pointer
+// does: the host leaves its cursor out of the picture.)
+- (void)fresh
+{
+    if ([self live] && !hidden) {
+        LiRequestIdrFrame();
+    }
+}
+- (void)moved:(NSNotification*)note
+{
+    if (note.object == nil || note.object == window) {
+        [self fresh];
+        // And once more when the move has settled (the slide between Spaces, the zoom into fullscreen).
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(fresh) object:nil];
+        [self performSelector:@selector(fresh) withObject:nil afterDelay:0.8];
+    }
+}
+- (void)spaceChanged:(NSNotification*)note
+{
+    if ([self live] && window.onActiveSpace) {
+        [self moved:nil];
     }
 }
 - (void)becameActive:(NSNotification*)note
@@ -984,6 +1021,19 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     if (!named && deviceId != nullptr && NSApp.applicationIconImage != nil) {
         named = true;
         NSString* deviceName = [@(deviceId) stringByRemovingPercentEncoding] ?: @(deviceId);
+        // And its name, where macOS names apps: the Dock, the app switcher,
+        // Mission Control, a fullscreen Space. All streams are one app by
+        // their bundle, so the name is set for this process.
+        // ponytail: LaunchServices keeps this call to itself; if it is ever
+        // gone the name stays the app's, and nothing else changes.
+        w.title = deviceName;
+        void* services = dlopen("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/LaunchServices", RTLD_LAZY);
+        auto currentAsn = services ? (CFTypeRef (*)(void))dlsym(services, "_LSGetCurrentApplicationASN") : nullptr;
+        auto setItem = services ? (OSStatus (*)(int, CFTypeRef, CFStringRef, CFTypeRef, CFDictionaryRef*))dlsym(services, "_LSSetApplicationInformationItem") : nullptr;
+        CFStringRef* nameKey = services ? (CFStringRef*)dlsym(services, "_kLSDisplayNameKey") : nullptr;
+        if (currentAsn != nullptr && setItem != nullptr && nameKey != nullptr && currentAsn() != nullptr) {
+            setItem(-2 /* this login session */, currentAsn(), *nameKey, (CFStringRef)deviceName, nullptr);
+        }
         NSImage* base = NSApp.applicationIconImage;
         NSImage* icon = [NSImage imageWithSize:NSMakeSize(256, 256) flipped:NO drawingHandler:^BOOL(NSRect rect) {
             [base drawInRect:rect];
@@ -1016,6 +1066,10 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         s_Warm = [[ChromeWarm alloc] init];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(becameActive:) name:NSApplicationDidBecomeActiveNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(coverChanged:) name:NSWindowDidChangeOcclusionStateNotification object:nil];
+        [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(moved:) name:NSWindowDidEnterFullScreenNotification object:nil];
+        [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(moved:) name:NSWindowDidExitFullScreenNotification object:nil];
+        [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(moved:) name:NSWindowDidDeminiaturizeNotification object:nil];
+        [NSWorkspace.sharedWorkspace.notificationCenter addObserver:s_Warm selector:@selector(spaceChanged:) name:NSWorkspaceActiveSpaceDidChangeNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(placed:) name:NSWindowDidMoveNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(placed:) name:NSWindowDidResizeNotification object:nil];
         [NSDistributedNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(told:) name:@"dev.eduwass.moonlight-next.stream" object:nil

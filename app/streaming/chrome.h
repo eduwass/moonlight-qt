@@ -48,7 +48,12 @@ bool chromeUnseen();     // the window is out of sight (a warm stream): nothing 
 bool chromeKey(int key, bool down, int mods);
 void chromeRaise();          // something was put on top of the window's content; go back above it
 void chromeLeftFullscreen(); // the window is back from fullscreen and has its style again
+// The instant pointer is asked for, but the host's helper has not got through
+// (yet, or at all): the host's cursor is still in the picture, and this
+// machine's pointer over it would make two. cursorshare_mac.mm. Any thread.
+bool cursorShareWaiting();
 #else
+static inline bool cursorShareWaiting() { return false; }
 static inline void chromeStart(SDL_Window*, void (*)(int)) {}
 static inline void chromeUpdate(const ChromeState*) {}
 static inline bool chromeShown() { return false; }
