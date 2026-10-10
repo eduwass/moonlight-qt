@@ -516,6 +516,9 @@ private:
 int main(int argc, char *argv[])
 {
     SDL_SetMainReady();
+#ifdef Q_OS_DARWIN
+    managerBeforeLaunch();
+#endif
 
     // Set the app version for the QCommandLineParser's showVersion() command
     QCoreApplication::setApplicationVersion(VERSION_STR);

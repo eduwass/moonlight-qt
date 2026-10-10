@@ -27,6 +27,7 @@
 #include "manager.h"
 
 #import <Cocoa/Cocoa.h>
+#import <objc/runtime.h>
 
 void chromeSettingsOpen(const char* host);
 void chromeSettingsDoctor(const char* device);
@@ -188,6 +189,7 @@ static void tellStream(NSString* name, NSString* what)
     NSButton* endStream;
     int shooting; // screenshots on their way
     NSMutableDictionary<NSString*, NSWindow*>* waiting; // by device id: what is shown where a stream is about to be
+    NSMutableDictionary<NSString*, NSDate*>* shownAt;    // by device id: when its stream last said it had come forward
 }
 @end
 
@@ -702,6 +704,13 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     managerOpenUrl([note.object UTF8String]);
 }
 
+- (void)streamShown:(NSNotification*)note
+{
+    if ([note.object isKindOfClass:[NSString class]]) {
+        shownAt[note.object] = [NSDate date];
+    }
+}
+
 - (void)streamUp:(NSNotification*)note
 {
     if ([note.object isKindOfClass:[NSString class]]) {
@@ -741,8 +750,25 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     [self start:[self device] != nil ? withPlacement([self device]) : nil];
 }
 
-// Starts the stream of a device, or brings its window forward if it is open.
+- (void)startIfGone:(NSDictionary*)device tries:(int)tries
+{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), dispatch_get_main_queue(), ^{
+        if (!streamRuns(device[@"name"])) {
+            [self start:device again:YES];
+        }
+        else if (tries > 1) {
+            [self startIfGone:device tries:tries - 1];
+        }
+    });
+}
+
 - (void)start:(NSDictionary*)asGiven
+{
+    [self start:asGiven again:NO];
+}
+
+// Starts the stream of a device, or brings its window forward if it is open.
+- (void)start:(NSDictionary*)asGiven again:(BOOL)again
 {
     NSDictionary* device = [[asGiven copy] autorelease];
     NSString* deviceName = device[@"name"];
@@ -754,6 +780,20 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     }
     if (streamRuns(deviceName)) {
         tellStream(deviceName, @"show");
+        // It may be one that is on its way out (its window just closed, the
+        // host still being told): that one shows nothing, and the click or the
+        // link would be for nothing. If it is gone within a few seconds, this
+        // is started again, once.
+        // (A stream that is well says so at once: "shown".)
+        if (!again) {
+            NSDate* asked = [NSDate date];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.7 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                NSDate* answered = shownAt[deviceId(deviceName)];
+                if (answered == nil || [answered compare:asked] == NSOrderedAscending) {
+                    [self startIfGone:device tries:16];
+                }
+            });
+        }
         return;
     }
     [starting addObject:deviceName];
@@ -992,6 +1032,9 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     running = [[NSMutableSet alloc] init];
     starting = [[NSMutableSet alloc] init];
     waiting = [[NSMutableDictionary alloc] init];
+    shownAt = [[NSMutableDictionary alloc] init];
+    [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(streamShown:) name:@"dev.eduwass.moonlight-next.shown" object:nil
+                                            suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
     [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(streamUp:) name:@"dev.eduwass.moonlight-next.up" object:nil
                                             suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
 
@@ -1321,6 +1364,24 @@ static void passLink(NSString* link, bool thenQuit)
     [NSDistributedNotificationCenter.defaultCenter addObserver:passer selector:@selector(done:) name:@"dev.eduwass.moonlight-next.opened" object:link
                                             suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
     [passer say];
+}
+
+// As it finishes launching, AppKit goes through the main menu to add its text
+// input items, and on macOS 15 it first loads the Writing Tools library to see
+// whether those belong there: 0.48 to 0.56 s on the main thread of every
+// process of the app, measured, before it does anything of its own (a stream's
+// process cannot ask its host for anything meanwhile). The app has no use for
+// Writing Tools, so the question is answered here.
+// ponytail: the method asked is AppKit's own (+[NSTextView _supportsWritingTools]);
+// if a later macOS has no such method this does nothing and the half second is
+// back, nothing else. The public defaults that take Dictation and Emoji out of
+// the menu do not stop the library being loaded (tried).
+void managerBeforeLaunch()
+{
+    Method asked = class_getClassMethod(NSTextView.class, NSSelectorFromString(@"_supportsWritingTools"));
+    if (asked != nullptr && strcmp(method_getTypeEncoding(asked) ?: "", "B16@0:8") == 0) {
+        method_setImplementation(asked, imp_implementationWithBlock(^BOOL(id) { return NO; }));
+    }
 }
 
 void managerAlert(const char* text)

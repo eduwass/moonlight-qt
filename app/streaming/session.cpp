@@ -1,4 +1,5 @@
 #include "session.h"
+#include "chrome.h"
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
@@ -2314,6 +2315,7 @@ void Session::exec()
     }
 
 DispatchDeferredCleanup:
+    chromeConnection(false); // fork: on its way out; it no longer answers "show" (chrome_mac.mm)
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
 

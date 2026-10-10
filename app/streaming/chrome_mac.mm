@@ -948,6 +948,14 @@ bool chromeUnseen()
         [self finish];
     }
     else {
+        // "Shown": the device window takes silence for a stream on its way
+        // out, and starts a new one if this one is gone within a few seconds.
+        // (No answer in the middle of a restart in place either; the stream
+        // is then still there afterwards, and nothing is started.)
+        if (s_Connection) {
+            [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.shown" object:@(device)
+                                                                        userInfo:nil deliverImmediately:YES];
+        }
         [self show:true];
     }
 }
