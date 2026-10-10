@@ -20,7 +20,10 @@
 
 #define CLIPBOARD_MAX_BYTES (1024 * 1024)
 #define CLIPBOARD_MAX_PICTURE (20 * 1024 * 1024)
-#define CLIPBOARD_SECONDS 6 // an ssh that has not finished by then is ended
+#define CLIPBOARD_MAX_TIFF (96 * 1024 * 1024) // a picture not yet PNG: more than this is not even looked at
+// An ssh that has not finished in time is ended: six seconds, and one more
+// for every 250 kB it has to carry (a 20 MB picture over slow Wi-Fi).
+#define CLIPBOARD_SECONDS(bytes) (6 + (bytes) / (250 * 1024))
 
 static NSString* s_Destination;
 static bool s_Linux;
@@ -30,15 +33,16 @@ static NSString* s_Both;       // the text both sides are known to have
 static NSData* s_BothPicture;  // or the picture, as PNG
 static NSInteger s_Seen = -1;  // this Mac's pasteboard change count when it last had nothing more to send
 static NSInteger s_Turn;       // counts this app's comings to the front
+static NSInteger s_Sending = -1; // the change count of what is on its way over, if anything is
 
 // Runs ssh with a command for the other machine, gives it `input` and returns
 // what it printed, or nil if it failed. Not on the main thread.
-static NSData* remote(NSString* command, NSData* input, NSUInteger most)
+static NSData* remote(NSString* command, NSData* input, NSUInteger most, NSUInteger seconds)
 {
     NSTask* task = [[[NSTask alloc] init] autorelease];
     task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/ssh"];
     // One connection is kept and used again: a new one costs a third of a second.
-    task.arguments = @[@"-o", @"BatchMode=yes", @"-o", @"ConnectTimeout=4", @"-o", @"ControlMaster=auto",
+    task.arguments = @[@"-o", @"BatchMode=yes", @"-o", @"ConnectTimeout=4", @"-o", @"ServerAliveInterval=2", @"-o", @"ServerAliveCountMax=2", @"-o", @"ControlMaster=auto",
                        @"-o", [NSString stringWithFormat:@"ControlPath=%@/.ssh/cm-%%C", NSHomeDirectory()], @"-o", @"ControlPersist=600",
                        @"--", s_Destination, command];
     NSPipe* in = [NSPipe pipe];
@@ -49,7 +53,7 @@ static NSData* remote(NSString* command, NSData* input, NSUInteger most)
     if (![task launchAndReturnError:nil]) {
         return nil;
     }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, CLIPBOARD_SECONDS * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)seconds * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         if (task.running) {
             [task terminate];
         }
@@ -92,50 +96,62 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
     s_Turn++; // a pull still on its way is from before this, and is dropped
     NSPasteboard* board = NSPasteboard.generalPasteboard;
     NSInteger count = board.changeCount;
-    if (count == s_Seen) {
+    // Nothing new, or the same thing is on its way already: sent twice, the
+    // second could land on top of something copied over there in between.
+    if (count == s_Seen || count == s_Sending) {
         return;
     }
     NSString* text = [board stringForType:NSPasteboardTypeString];
-    NSData* bytes = [text dataUsingEncoding:NSUTF8StringEncoding];
-    NSData* picture = nil;
-    if (bytes.length == 0) {
-        // A picture and no text: a screenshot, an image copied from a page.
-        text = nil;
-        picture = [board dataForType:NSPasteboardTypePNG];
-        NSData* tiff = picture == nil ? [board dataForType:NSPasteboardTypeTIFF] : nil;
-        if (tiff != nil) {
-            picture = [[NSBitmapImageRep imageRepWithData:tiff] representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-        }
-        bytes = picture;
-    }
+    NSData* textBytes = [text dataUsingEncoding:NSUTF8StringEncoding];
+    // A picture and no text: a screenshot, an image copied from a page.
+    NSData* png = textBytes.length == 0 ? [board dataForType:NSPasteboardTypePNG] : nil;
+    NSData* tiff = textBytes.length == 0 && png == nil ? [board dataForType:NSPasteboardTypeTIFF] : nil;
+    bool isPicture = png != nil || tiff != nil;
     // Nothing to send: neither of them, too much of it, what the other side
     // has already, or what a password manager marked as not to be passed on.
-    if (bytes.length == 0 || bytes.length > (picture != nil ? CLIPBOARD_MAX_PICTURE : CLIPBOARD_MAX_BYTES) ||
-            (picture != nil ? [picture isEqualToData:s_BothPicture] : [text isEqualToString:s_Both]) ||
+    if ((textBytes.length == 0 && !isPicture) || textBytes.length > CLIPBOARD_MAX_BYTES || tiff.length > CLIPBOARD_MAX_TIFF ||
+            (textBytes.length != 0 && [text isEqualToString:s_Both]) ||
             [board.types containsObject:@"org.nspasteboard.ConcealedType"] || [board.types containsObject:@"org.nspasteboard.TransientType"]) {
         s_Seen = count;
         return;
     }
     // wl-copy stays behind to serve the clipboard, and would hold the pipe open.
-    NSString* command = s_Linux ? [k_Wayland stringByAppendingString:picture != nil ? @"wl-copy -t image/png >/dev/null 2>&1" : @"wl-copy >/dev/null 2>&1"] :
-        picture == nil ? @"/usr/bin/pbcopy" :
+    NSString* command = s_Linux ? [k_Wayland stringByAppendingString:isPicture ? @"wl-copy -t image/png >/dev/null 2>&1" : @"wl-copy >/dev/null 2>&1"] :
+        !isPicture ? @"/usr/bin/pbcopy" :
         @"f=$(mktemp); cat > $f; osascript -e \"set the clipboard to (read (POSIX file \\\"$f\\\") as «class PNGf»)\"; r=$?; rm -f $f; exit $r";
+    NSData* both = [[s_BothPicture retain] autorelease];
+    s_Sending = count;
     dispatch_async(s_Queue, ^{
-        bool sent = remote(command, bytes, 0) != nil;
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: %s of %lu bytes %s", picture != nil ? "a picture" : "text",
-                    (unsigned long)bytes.length, sent ? "sent" : "could not be sent; it is tried again the next time");
-        dispatch_async(dispatch_get_main_queue(), ^{
-            // Only once it is over there is it what both sides have. One that
-            // did not arrive is tried again the next time this comes to the
-            // front, and until then nothing from there may replace it.
-            if (sent) {
-                [s_Both release];
-                [s_BothPicture release];
-                s_Both = [text copy];
-                s_BothPicture = [picture copy];
-                s_Seen = count;
+        @autoreleasepool {
+            // Making a PNG of a large picture takes a moment: not on the main thread.
+            NSData* picture = png ?: (tiff != nil ? [[NSBitmapImageRep imageRepWithData:tiff] representationUsingType:NSBitmapImageFileTypePNG properties:@{}] : nil);
+            NSData* bytes = isPicture ? picture : textBytes;
+            // No: there is nothing more to send. Yes: only if it got there.
+            bool wanted = bytes.length != 0 && bytes.length <= (isPicture ? CLIPBOARD_MAX_PICTURE : CLIPBOARD_MAX_BYTES) &&
+                          !(isPicture && [picture isEqualToData:both]);
+            bool sent = wanted && remote(command, bytes, 0, CLIPBOARD_SECONDS(bytes.length)) != nil;
+            if (wanted) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: %s of %lu bytes %s", isPicture ? "a picture" : "text",
+                            (unsigned long)bytes.length, sent ? "sent" : "could not be sent; it is tried again the next time");
             }
-        });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (s_Sending == count) {
+                    s_Sending = -1;
+                }
+                // Only once it is over there is it what both sides have. One
+                // that did not arrive is tried again the next time this comes
+                // to the front, and until then nothing from there may replace it.
+                if (sent) {
+                    [s_Both release];
+                    [s_BothPicture release];
+                    s_Both = isPicture ? nil : [text copy];
+                    s_BothPicture = [picture copy];
+                }
+                if (sent || !wanted) {
+                    s_Seen = count;
+                }
+            });
+        }
     });
 }
 
@@ -157,7 +173,7 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
     // What it holds, said on a first line: "text" or "png". Text if there is
     // any; a picture only when that is all there is.
     NSString* command = !s_Linux ?
-        @"if /usr/bin/pbpaste | head -c1 | grep -q .; then echo text; /usr/bin/pbpaste; else f=$(mktemp); "
+        @"if [ \"$(/usr/bin/pbpaste | wc -c)\" -gt 0 ]; then echo text; /usr/bin/pbpaste; else f=$(mktemp); "
          "osascript -e \"set d to the clipboard as «class PNGf»\" -e \"set h to open for access POSIX file \\\"$f\\\" with write permission\" "
          "-e \"write d to h\" -e \"close access h\" >/dev/null 2>&1; if [ -s $f ]; then echo png; cat $f; fi; rm -f $f; fi" :
         [k_Wayland stringByAppendingString:
@@ -165,7 +181,7 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
          "if printf '%s\\n' \"$t\" | grep -q '^text/plain'; then echo text; wl-paste -n -t text 2>/dev/null; "
          "elif printf '%s\\n' \"$t\" | grep -qx 'image/png'; then echo png; wl-paste -t image/png 2>/dev/null; fi"];
     dispatch_async(s_Queue, ^{
-        NSData* got = remote(command, nil, CLIPBOARD_MAX_PICTURE + 8);
+        NSData* got = remote(command, nil, CLIPBOARD_MAX_PICTURE + 8, CLIPBOARD_SECONDS(CLIPBOARD_MAX_PICTURE));
         NSString* text = nil;
         NSData* picture = nil;
         if (got.length > 5 && memcmp(got.bytes, "text\n", 5) == 0 && got.length - 5 <= CLIPBOARD_MAX_BYTES) {
