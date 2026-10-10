@@ -36,6 +36,20 @@ It holds 60 frames a second up to 5120 × 2160. At 6400 × 2700 a frame takes it
 
 Over Tailscale instead of the home network, the same stream is about 4 ms slower.
 
+## What the hand waits for
+
+From the action to the first picture of the stream, on the watching Mac's clock.
+
+| Action | 13" over Thunderbolt | PC over Wi-Fi |
+| --- | --- | --- |
+| Open a device by link, app not running | 2.1 s | 3.7–4.3 s |
+| Resize the window | 3.5–4.0 s | 2.7 s |
+| Bring a warm stream's window back | 0.4 s | 0.4 s |
+
+The app's own window is up 0.7 s after it is started.
+
+Of a connect to the PC, 1.7 s is Sunshine trying its encoders, which it does at every launch. Of a resize on the Mac host, 1.3 s is its virtual display taking the new size and capture starting again. About 1.3 s of any connect is the app starting.
+
 ## Where the time goes
 
 At 3400 × 1912 from the PC, of 41 ms: 9 ms is the PC capturing and encoding, 4–6 ms the network, 3.5 ms decoding. The rest, about 23 ms, is waiting: for the host's next capture, for the next frame slot, and for the display.
