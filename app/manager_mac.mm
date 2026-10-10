@@ -17,6 +17,7 @@
 //   fixed, width, height   a fixed stream size in pixels, scaled to fit the window; otherwise the window's pixels
 //   windowWidth/Height     the window to open, in points
 //   truePixels, rawColor, localCursor, noSound
+//   ready                  its stream is started out of sight when the app starts, to open at once
 //   fpsRule                "pixels:above:below", see dynres.cpp (MOONLIGHT_FPS_ABOVE)
 //   bitrate                kbps, 0 for Moonlight's own choice
 //   screenshot             a shell command that writes a picture of the device's screen to stdout
@@ -190,6 +191,7 @@ static void tellStream(NSString* name, NSString* what)
     NSButton* rawColor;
     NSButton* localCursor;
     NSButton* noSound;
+    NSButton* ready;
     NSTextField* bitrate;
     NSTextField* screenshot;
     NSTextField* before;
@@ -357,6 +359,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         rawColor.state = [device[@"rawColor"] boolValue];
         localCursor.state = [device[@"localCursor"] boolValue];
         noSound.state = [device[@"noSound"] boolValue];
+        ready.state = [device[@"ready"] boolValue];
         // What it is on that kind of machine, so that a pointer that never changes shape is no surprise.
         localCursor.title = @"Instant pointer";
         bitrate.stringValue = [device[@"bitrate"] integerValue] > 0 ? [device[@"bitrate"] stringValue] : @"";
@@ -392,6 +395,43 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         NSDateFormatter* format = [[[NSDateFormatter alloc] init] autorelease];
         format.timeStyle = NSDateFormatterMediumStyle;
         pictureNote.stringValue = [NSString stringWithFormat:@"Its screen at %@", [format stringFromDate:at]];
+    }
+}
+
+// As the app starts: a picture of every device's screen, so that the one that
+// is opened next is shown as it is now and not as it was the last time; and
+// the streams of the devices that are kept ready, started out of sight.
+- (void)shootAll
+{
+    for (NSDictionary* device in [[s_Devices copy] autorelease]) {
+        NSString* command = device[@"screenshot"], *deviceName = device[@"name"];
+        NSDate* at = pictureTimes[deviceName];
+        if (command.length == 0 || deviceName == nil || (at != nil && -at.timeIntervalSinceNow < 60)) {
+            continue;
+        }
+        pictureTimes[deviceName] = [NSDate date]; // asked for: not again within the minute
+        runShell(command, 10, ^(NSData* output) {
+            NSImage* image = output.length > 0 ? [[[NSImage alloc] initWithData:output] autorelease] : nil;
+            if (image != nil) {
+                pictures[deviceName] = image;
+                [output writeToURL:pictureFile(deviceName) atomically:YES];
+                [self show];
+            }
+        });
+    }
+}
+- (void)startReady
+{
+    // Not where closing a window ends its stream: there is no keeping one out of sight then.
+    if ([NSUserDefaults.standardUserDefaults integerForKey:@"WarmSeconds"] == 0) {
+        return;
+    }
+    for (NSDictionary* device in [[s_Devices copy] autorelease]) {
+        if ([device[@"ready"] boolValue] && device[@"name"] != nil && !streamRuns(device[@"name"])) {
+            NSMutableDictionary* unseen = withPlacement(device);
+            unseen[@"outOfSight"] = @YES;
+            [self start:unseen];
+        }
     }
 }
 
@@ -525,6 +565,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     [self reread];
     [self ask];
     [self shoot:NO];
+    [self shootAll]; // the others too, a minute at least after their last
 }
 
 // The devices may have been changed from elsewhere since they were read: a
@@ -618,6 +659,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     device[@"truePixels"] = @(truePixels.state == NSControlStateValueOn);
     device[@"rawColor"] = @(rawColor.state == NSControlStateValueOn);
     device[@"noSound"] = @(noSound.state == NSControlStateValueOn);
+    device[@"ready"] = @(ready.state == NSControlStateValueOn);
     device[@"localCursor"] = @(localCursor.state == NSControlStateValueOn);
     device[@"bitrate"] = @(MIN(500000, MAX(0, bitrate.integerValue)));
     device[@"screenshot"] = screenshot.stringValue;
@@ -984,7 +1026,9 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         return;
     }
     [starting addObject:deviceName];
-    [self wait:device];
+    if (![device[@"outOfSight"] boolValue]) {
+        [self wait:device]; // nothing to wait at for a stream that starts out of sight
+    }
     connect.enabled = NO;
     statusLine.stringValue = [device[@"before"] length] > 0 ? @"Waking it…" : @"Connecting…";
 
@@ -1064,6 +1108,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         if (!fixed && [device[@"truePixels"] boolValue]) environment[@"MOONLIGHT_PANEL_PIXELS"] = @"1";
         if ([device[@"rawColor"] boolValue]) environment[@"MOONLIGHT_RAW_COLOR"] = @"1";
         if ([device[@"noSound"] boolValue]) environment[@"MOONLIGHT_NO_SOUND"] = @"1";
+        if ([device[@"outOfSight"] boolValue]) environment[@"MOONLIGHT_HIDDEN"] = @"1"; // kept ready: see startReady
         if ([device[@"clipboard"] length] > 0) environment[@"MOONLIGHT_CLIPBOARD"] = device[@"clipboard"];
         if ([device[@"localCursor"] boolValue]) environment[@"MOONLIGHT_LOCAL_CURSOR"] = @"1";
         [self launch:arguments environment:environment for:deviceName];
@@ -1369,7 +1414,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     rawColor = [self check:@"Raw colours" tip:@"Show the device's colour values as they are, as its own cable to this monitor would. For a desktop tuned by eye on this monitor."];
     localCursor = [self check:@"Instant pointer" tip:@"This Mac draws the pointer itself, so it moves with the hand. A host with the cursor helper shows its own cursor shapes; without it the pointer is a plain arrow."];
     noSound = [self check:@"No sound" tip:@"Do not play the device's sound here, and do not open this Mac's sound output for the stream. For a device that sends none, or whose sound reaches you another way."];
-    NSStackView* checks = [NSStackView stackViewWithViews:@[truePixels, rawColor, localCursor, noSound]];
+    ready = [self check:@"Keep ready" tip:@"Start this device's stream out of sight when the app starts, so that its window opens at once. The device sends picture all that time, as for a stream kept warm, and for as long (Settings › General)."];
+    NSStackView* checks = [NSStackView stackViewWithViews:@[truePixels, rawColor, localCursor, noSound, ready]];
     checks.spacing = 16;
     bitrate = [self field:@"automatic"];
     [bitrate.widthAnchor constraintEqualToConstant:90].active = YES;
@@ -1496,7 +1542,7 @@ static NSMutableDictionary* plainEnvironment()
 {
     NSMutableDictionary* all = [[NSProcessInfo.processInfo.environment mutableCopy] autorelease];
     for (NSString* key in @[@"DEVICE", @"CHROME", @"FPS_ABOVE", @"WINDOW", @"WINDOW_AT", @"WINDOW_ONCE", @"FOLLOW", @"PANEL_PIXELS",
-                            @"RAW_COLOR", @"LOCAL_CURSOR", @"CLIPBOARD", @"OPEN_URL", @"CLASSIC", @"NO_SOUND"]) {
+                            @"RAW_COLOR", @"LOCAL_CURSOR", @"CLIPBOARD", @"OPEN_URL", @"CLASSIC", @"NO_SOUND", @"HIDDEN"]) {
         [all removeObjectForKey:[@"MOONLIGHT_" stringByAppendingString:key]];
     }
     [all removeObjectForKey:@"SDL_AUDIODRIVER"]; // set in a stream's process for MOONLIGHT_NO_SOUND, see main.cpp
@@ -1669,6 +1715,13 @@ void managerStart()
         });
     }
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [s_Manager shootAll];
+        // (Not for a start that a link asked for: that one has its own stream to open.)
+        if (!s_OpenedByLink) {
+            [s_Manager startReady];
+        }
+    });
     // Settings… with ⌘, in the app's menu, where a Mac app has it. (Qt makes
     // that menu when its loop starts, so this waits a turn.)
     dispatch_async(dispatch_get_main_queue(), ^{

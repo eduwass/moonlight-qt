@@ -1428,6 +1428,17 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     s_Tip = tip;
 
     chromeRaise();
+    // MOONLIGHT_HIDDEN: a device kept ready. Its stream starts out of sight, as
+    // if its window had been closed warm at once, and is shown when asked for.
+    static bool hiddenOnce;
+    if (!hiddenOnce && getenv("MOONLIGHT_HIDDEN") != nullptr) {
+        hiddenOnce = true;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([s_Warm live] && !s_Warm->hidden) {
+                [s_Warm closeAsked:nil];
+            }
+        });
+    }
     if ([NSUserDefaults.standardUserDefaults boolForKey:@"TitleBar"] && !(w.styleMask & NSWindowStyleMaskFullScreen)) {
         // (A window that has its title bar already, from a session before, keeps its size.)
         windowStyle(true, !(w.styleMask & NSWindowStyleMaskFullSizeContentView));
