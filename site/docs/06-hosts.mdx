@@ -30,6 +30,8 @@ For the **instant pointer**, the host runs `cursor-share` (in `mac-host/`), whic
 
 - **The instant pointer, as a plain arrow.** Hyprland hands out a cursor's picture only when an application draws its own, not for the usual themed cursors, so the Mac cannot be told what the PC's cursor looks like. What it can do is draw its own arrow, which moves with your hand, while the PC keeps its cursor out of the picture: `mac/pc-wake.sh` tells the PC so when the device's **Instant pointer** is on, the prep command hides Hyprland's cursor for the stream, and the app's undo command (`sunshine-virtual-display release`) brings it back when the stream ends. You lose the cursor's shapes (no I-beam over text, no resize arrows) and gain about 40 ms on every pointer movement. If a stream ends without its undo command (your Mac asleep, the network gone), the PC brings its cursor back by itself within a minute of the encoder falling idle; `sunshine-virtual-display release` does it at once.
 
+- **Encoders tried once.** Sunshine 2026.516 on Linux tests every encoder again each time a stream is launched, which with NVENC is 1.3 s of every connect and every window resize. `pc/sunshine-probe-once` builds that same version on the PC with the one line changed (no root needed) and `pc/install.sh` puts it in service; newer Sunshine no longer needs it.
+
 With an NVIDIA card stuck on an older driver, check that your Sunshine build's encoder still matches it (a GTX 1080 on driver 580 needs Sunshine 2026.516).
 
 `pc/install.sh`, run on the PC, puts the configuration, the script and the two services in place. `pc/doctor.sh` checks all of this from another machine, including that what is installed is what is in the repository.
