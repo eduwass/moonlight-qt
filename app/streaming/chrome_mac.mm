@@ -19,6 +19,7 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <atomic>
 #include <initializer_list>
 #include <set>
 #include <vector>
@@ -751,6 +752,12 @@ static bool chromeTakes(int key, bool down, int sdlMods)
 @end
 
 static ChromeWarm* s_Warm;
+static std::atomic<bool> s_Unseen; // read by the thread that draws
+
+bool chromeUnseen()
+{
+    return s_Unseen;
+}
 
 @implementation ChromeWarm
 // The window it was set up for may be gone: a session can end by itself while
@@ -761,6 +768,7 @@ static ChromeWarm* s_Warm;
 }
 - (void)rest
 {
+    s_Unseen = false; // every way out of being hidden comes through here
     [end invalidate];
     end = nil;
     if (awake != nil) {
@@ -812,6 +820,7 @@ static ChromeWarm* s_Warm;
         return;
     }
     hidden = true;
+    s_Unseen = true;
     showBar(false);
     [window orderOut:nil];
     SDL_EnableScreenSaver(); // an unseen stream must not keep this Mac's screen awake

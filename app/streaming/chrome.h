@@ -42,6 +42,7 @@ void chromeStart(SDL_Window* window, void (*action)(int));
 void chromeUpdate(const ChromeState* state);
 bool chromeShown();
 bool chromeHasPointer(); // the pointer is on the bar, and its movement is not for the remote machine
+bool chromeUnseen();     // the window is out of sight (a warm stream): nothing need be drawn. Any thread.
 // A key was pressed or released, with SDL's key code and modifier state.
 // True if the chrome took it, and it must not go to the remote machine.
 bool chromeKey(int key, bool down, int mods);
@@ -52,6 +53,7 @@ static inline void chromeStart(SDL_Window*, void (*)(int)) {}
 static inline void chromeUpdate(const ChromeState*) {}
 static inline bool chromeShown() { return false; }
 static inline bool chromeHasPointer() { return false; }
+static inline bool chromeUnseen() { return false; }
 static inline bool chromeKey(int, bool, int) { return false; }
 static inline void chromeRaise() {}
 static inline void chromeLeftFullscreen() {}

@@ -1,5 +1,6 @@
 #include "pacer.h"
 #include "streaming/streamutils.h"
+#include "streaming/chrome.h"
 
 #ifdef Q_OS_WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -146,7 +147,9 @@ int Pacer::renderThread(void* context)
 
     while (!me->m_Stopping) {
         // Wait for the renderer to be ready for the next frame
-        me->m_VsyncRenderer->waitToRender();
+        if (!chromeUnseen()) { // fork: see renderFrame()
+            me->m_VsyncRenderer->waitToRender();
+        }
 
         // Acquire the frame queue lock to protect the queue and
         // the not empty condition
@@ -335,8 +338,17 @@ void Pacer::renderFrame(AVFrame* frame)
     uint64_t beforeRender = LiGetMicroseconds();
     m_VideoStats->totalPacerTimeUs += (beforeRender - (uint64_t)frame->pkt_dts);
 
-    // Render it
-    m_VsyncRenderer->renderFrame(frame);
+    // Render it. Fork: not while the window is out of sight (a warm stream,
+    // see chrome_mac.mm): drawing what nobody sees is half of what a warm
+    // stream costs this machine. A frame the renderer has already taken from
+    // its swapchain must still be handed back (plvk.cpp holds a lock from
+    // waitToRender() until then), which is what cleanupRenderContext() does.
+    if (chromeUnseen()) {
+        m_VsyncRenderer->cleanupRenderContext();
+    }
+    else {
+        m_VsyncRenderer->renderFrame(frame);
+    }
     uint64_t afterRender = LiGetMicroseconds();
 
     m_VideoStats->totalRenderTimeUs += (afterRender - beforeRender);
