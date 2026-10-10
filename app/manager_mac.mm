@@ -197,6 +197,7 @@ static void tellStream(NSString* name, NSString* what)
 @end
 
 @interface ManagerController ()
+- (void)reloadList;
 - (void)show;
 - (void)reread;
 - (void)fillDockMenu:(NSMenu*)menu;
@@ -402,6 +403,18 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     });
 }
 
+// The list drawn again, with the device that was selected still selected: a
+// table that is reloaded forgets, and with no device selected the rest of the
+// window is empty.
+- (void)reloadList
+{
+    NSInteger selected = table.selectedRow;
+    [table reloadData];
+    if (selected >= 0 && selected < (NSInteger)s_Devices.count) {
+        [table selectRowIndexes:[NSIndexSet indexSetWithIndex:selected] byExtendingSelection:NO];
+    }
+}
+
 - (void)refresh:(id)sender
 {
     [self shoot:YES];
@@ -415,7 +428,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     if (deviceName != nil) {
         tellStream(deviceName, @"end");
         [running removeObject:deviceName];
-        [table reloadData];
+        [self reloadList];
         [self show];
     }
 }
@@ -808,7 +821,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
                 [starting removeObject:deviceName];
             }
             connect.enabled = YES;
-            [table reloadData];
+            [self reloadList];
             [self show];
         });
     }];
