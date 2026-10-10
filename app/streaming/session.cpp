@@ -976,7 +976,10 @@ bool Session::validateLaunch(SDL_Window* testWindow)
         return false;
     }
 
-    if (m_Preferences->absoluteMouseMode && !m_App.isAppCollectorGame) {
+    // Fork: not said here. Every launch warning holds the start of the stream
+    // back 3.5 s for its toast (StreamSegue.qml), and this fork is for desktops:
+    // the remote desktop mouse mode is how it always runs.
+    if (m_Preferences->absoluteMouseMode && !m_App.isAppCollectorGame && qEnvironmentVariableIsSet("MOONLIGHT_GAMES_WARNING")) {
         emitLaunchWarning(tr("Your selection to enable remote desktop mouse mode may cause problems in games."));
     }
 

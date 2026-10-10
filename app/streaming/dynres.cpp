@@ -18,8 +18,11 @@
 
 #include <QWriteLocker>
 
-// How long the window size must hold still before we reconnect.
-#define DYNRES_SETTLE_MS 700
+// How long the window size must hold still before we reconnect. A drag is
+// waited out by the mouse button (below), so this only has to outlast the
+// steps of an animated resize (fullscreen, a tiling window manager). It was
+// 700, which was 0.45 s of every resize spent waiting for nothing.
+#define DYNRES_SETTLE_MS 250
 
 // Smaller than this is a window on its way somewhere else, not a target.
 #define DYNRES_MIN_WIDTH 640
