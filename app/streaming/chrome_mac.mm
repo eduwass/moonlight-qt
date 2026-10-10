@@ -933,6 +933,10 @@ bool chromeUnseen()
     if (window.miniaturized) {
         [window deminiaturize:nil];
     }
+    // (One that started out of sight was no app in the Dock until now.)
+    if (NSApp.activationPolicy != NSApplicationActivationPolicyRegular) {
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    }
     [window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [self moved:nil]; // a new picture: none was drawn while it was away

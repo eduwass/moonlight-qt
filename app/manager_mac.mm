@@ -1291,6 +1291,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     window.releasedWhenClosed = NO;
     window.delegate = self;
     window.minSize = NSMakeSize(820, 640);
+    // A list and a form: nothing to fill a screen with. The green light makes it larger, and no more.
+    window.collectionBehavior = NSWindowCollectionBehaviorFullScreenNone;
     [window setFrameAutosaveName:@"Manager"];
 
     NSSplitViewController* split = [[[NSSplitViewController alloc] init] autorelease];
@@ -1642,6 +1644,10 @@ bool managerScreenLocked()
 
 void managerBeforeLaunch()
 {
+    // A stream that starts out of sight (see main.cpp): no app in the Dock, and none that comes to the front.
+    if (getenv("MOONLIGHT_HIDDEN") != nullptr) {
+        [[NSApplication sharedApplication] setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    }
     Method asked = class_getClassMethod(NSTextView.class, NSSelectorFromString(@"_supportsWritingTools"));
     if (asked != nullptr && strcmp(method_getTypeEncoding(asked) ?: "", "B16@0:8") == 0) {
         method_setImplementation(asked, imp_implementationWithBlock(^BOOL(id) { return NO; }));

@@ -588,6 +588,14 @@ int main(int argc, char *argv[])
 {
     SDL_SetMainReady();
 #ifdef Q_OS_DARWIN
+    // Fork: MOONLIGHT_HIDDEN (a device kept ready): its stream starts out of
+    // sight, and must not come to the front as it does, taking the keyboard
+    // from whatever has it. Neither Qt nor SDL makes it an app with a place in
+    // the Dock then; it becomes one when its window is asked for (chrome_mac.mm).
+    if (qEnvironmentVariableIsSet("MOONLIGHT_HIDDEN")) {
+        qputenv("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM", "1");
+        qputenv("SDL_MAC_BACKGROUND_APP", "1");
+    }
     managerBeforeLaunch();
 #endif
     // Fork: MOONLIGHT_NO_SOUND (a device's "No sound"): the stream has SDL's
