@@ -17,7 +17,7 @@ Sunshine on macOS needs three things to feel like a local desktop.
 ssh my-mac 'caffeinate -u -t 30 >/dev/null 2>&1 & sleep 1'
 ```
 
-For the **instant pointer**, the host runs `cursor-share` (in `mac-host/`), which sends the cursor's shape to your Mac and tells Sunshine to leave its own cursor out of the picture.
+For the **instant pointer**, the host runs `cursor-share` (in `mac-host/`), which sends the cursor's shape to your Mac and tells Sunshine to leave its own cursor out of the picture. It gets to your Mac in one of two ways. If the device has an ssh destination in its **Clipboard** field, your Mac starts the helper over ssh and reads the cursor from there; nothing on the host has to be allowed, and the shapes are there a tenth of a second after the first picture. Without one, the host's prep command starts the helper and it connects to your Mac: macOS on the host then asks once whether "sunshine" may find devices on the local network (and again after a rebuilt Sunshine), and until that is allowed you see the host's own cursor, one round trip behind.
 
 `mac-host/install.sh`, run on the Mac, builds the helpers and sets up the services. `mac-host/doctor.sh` checks all of this from another machine.
 
