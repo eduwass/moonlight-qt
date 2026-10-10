@@ -31,7 +31,8 @@
 static char s_Host[64]; // the host we stream from; only it may set our cursor
 static void* s_Cursor;  // an SDL 3 cursor; main thread only
 static SDL_atomic_t s_Listening;
-static SDL_atomic_t s_Connected; // the host's helper is on the line
+static SDL_atomic_t s_Connected; // how many connections of the host's helper are being listened to (one, but for a moment)
+static SDL_atomic_t s_Serving;   // its connection, to let go of when a newer one comes
 static bool s_Plain;             // a host with no helper: a plain arrow, and nothing to wait for
 
 // ponytail: the SDL 2 we link is sdl2-compat, a layer over SDL 3, and the SDL 2
@@ -136,13 +137,8 @@ static void apply(NSData* png, int width, int height, int hotX, int hotY)
     s_Cursor = cursor;
 }
 
-static void serve(int fd)
+static void serve(FILE* in)
 {
-    FILE* in = fdopen(fd, "r");
-    if (in == nullptr) {
-        close(fd);
-        return;
-    }
     for (;;) {
         // A short line, read whole, so a peer cannot feed the parser without end.
         char line[64];
@@ -165,7 +161,6 @@ static void serve(int fd)
             [png release];
         });
     }
-    fclose(in);
 }
 
 static int listenForCursors(void*)
@@ -204,11 +199,32 @@ static int listenForCursors(void*)
         // is the one to see; when the helper goes, the other way round.
         // (mouse.cpp shows and hides the pointer, at its next movement: it
         // knows where the pointer is and what the user has asked for.)
-        SDL_AtomicSet(&s_Connected, 1);
-        @autoreleasepool {
-            serve(fd);
+        // The newest connection is the helper: an older one is let go of, so
+        // that one whose end was never heard of (seen: the host's side closed
+        // and this side still open) cannot keep the next helper waiting.
+        int previous = SDL_AtomicSet(&s_Serving, fd);
+        if (previous > 0) {
+            shutdown(previous, SHUT_RDWR);
         }
-        SDL_AtomicSet(&s_Connected, 0);
+        SDL_AtomicAdd(&s_Connected, 1);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            FILE* in = fdopen(fd, "r");
+            if (in != nullptr) {
+                @autoreleasepool {
+                    serve(in);
+                }
+            }
+            // No longer the one to let go of, and only then closed: its
+            // number may be the next connection's.
+            SDL_AtomicCAS(&s_Serving, fd, 0);
+            if (in != nullptr) {
+                fclose(in);
+            }
+            else {
+                close(fd);
+            }
+            SDL_AtomicAdd(&s_Connected, -1);
+        });
     }
 }
 
