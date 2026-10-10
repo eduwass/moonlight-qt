@@ -927,6 +927,41 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         [bar addSubview:light];
         s_Lights[i] = light;
     }
+    // Each stream is an app of its own in the Dock, all with the same icon:
+    // write on this one's which device it is.
+    static bool named;
+    const char* deviceId = getenv("MOONLIGHT_DEVICE");
+    if (!named && deviceId != nullptr && NSApp.applicationIconImage != nil) {
+        named = true;
+        NSString* deviceName = [@(deviceId) stringByRemovingPercentEncoding] ?: @(deviceId);
+        NSImage* base = NSApp.applicationIconImage;
+        NSImage* icon = [NSImage imageWithSize:NSMakeSize(256, 256) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+            [base drawInRect:rect];
+            NSMutableParagraphStyle* centred = [[[NSMutableParagraphStyle alloc] init] autorelease];
+            centred.alignment = NSTextAlignmentCenter;
+            centred.lineBreakMode = NSLineBreakByTruncatingTail;
+            // As large as the whole name allows; only a very long one is cut short.
+            NSDictionary* look = nil;
+            for (CGFloat size = 38; size >= 22; size -= 2) {
+                look = @{NSFontAttributeName: [NSFont systemFontOfSize:size weight:NSFontWeightBold],
+                         NSForegroundColorAttributeName: NSColor.whiteColor, NSParagraphStyleAttributeName: centred};
+                if ([deviceName sizeWithAttributes:look].width <= 196) {
+                    break;
+                }
+            }
+            CGFloat wide = MIN(232, ceil([deviceName sizeWithAttributes:look].width) + 36);
+            NSRect pill = NSMakeRect(round((256 - wide) / 2), 30, wide, 58);
+            [rgba(0x000000D9) setFill];
+            [[NSBezierPath bezierPathWithRoundedRect:pill xRadius:29 yRadius:29] fill];
+            [rgba(0xFFFFFF59) setStroke];
+            [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(pill, 1, 1) xRadius:28 yRadius:28] stroke];
+            CGFloat tall = ceil([deviceName sizeWithAttributes:look].height);
+            [deviceName drawInRect:NSMakeRect(pill.origin.x + 12, pill.origin.y + round((58 - tall) / 2), wide - 24, tall) withAttributes:look];
+            return YES;
+        }];
+        NSApp.applicationIconImage = icon;
+    }
+
     if (s_Warm == nil) {
         s_Warm = [[ChromeWarm alloc] init];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(becameActive:) name:NSApplicationDidBecomeActiveNotification object:nil];
