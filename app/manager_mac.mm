@@ -585,19 +585,25 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     if (waiting[key] != nil) {
         return;
     }
+    // Where and how large the stream's own window will be (chromeStart has the
+    // same test): where it was left if enough of that is on a screen, else
+    // the middle of the main one, no larger than fits there.
     CGFloat w = [device[@"windowWidth"] integerValue] ?: 1920, h = [device[@"windowHeight"] integerValue] ?: 1080;
-    NSRect visible = NSScreen.mainScreen.visibleFrame;
-    w = MIN(w, visible.size.width);
-    h = MIN(h, visible.size.height);
-    NSRect frame = NSMakeRect(NSMidX(visible) - w / 2, NSMidY(visible) - h / 2, w, h);
+    NSRect frame = NSZeroRect;
     if (device[@"windowLeft"] != nil && device[@"windowTop"] != nil) {
         NSRect left = NSMakeRect([device[@"windowLeft"] integerValue], [device[@"windowTop"] integerValue] - h, w, h);
         for (NSScreen* screen in NSScreen.screens) {
             NSRect showing = NSIntersectionRect(screen.visibleFrame, left);
             if (showing.size.width >= 200 && showing.size.height >= 100) {
-                frame = left; // the same test as the stream's own window (chromeStart)
+                frame = left;
             }
         }
+    }
+    if (NSIsEmptyRect(frame)) {
+        NSRect visible = NSScreen.mainScreen.visibleFrame;
+        w = MIN(w, visible.size.width);
+        h = MIN(h, visible.size.height);
+        frame = NSMakeRect(NSMidX(visible) - w / 2, NSMidY(visible) - h / 2, w, h);
     }
     NSWindow* shown = [[[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskFullSizeContentView
                                                      backing:NSBackingStoreBuffered defer:NO] autorelease];
@@ -615,14 +621,27 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     [shown setFrame:frame display:NO];
 
     NSView* content = shown.contentView;
-    NSImage* last = pictures[device[@"name"]] ?: [[[NSImage alloc] initWithContentsOfURL:pictureFile(device[@"name"])] autorelease];
-    if (last != nil) {
-        NSImageView* view = [[[NSImageView alloc] initWithFrame:content.bounds] autorelease];
-        view.image = last;
-        view.imageScaling = NSImageScaleProportionallyUpOrDown;
-        view.alphaValue = 0.45;
-        view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        [content addSubview:view];
+    NSString* deviceName = device[@"name"];
+    NSImageView* view = [[[NSImageView alloc] initWithFrame:content.bounds] autorelease];
+    view.image = pictures[deviceName] ?: [[[NSImage alloc] initWithContentsOfURL:pictureFile(deviceName)] autorelease];
+    view.imageScaling = NSImageScaleProportionallyUpOrDown;
+    view.alphaValue = 0.45;
+    view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [content addSubview:view];
+    // And a new one meanwhile: it is often there before the stream is, and is
+    // what the screen looks like now rather than when it was last looked at.
+    if ([device[@"screenshot"] length] > 0) {
+        runShell(device[@"screenshot"], 6, ^(NSData* output) {
+            NSImage* image = output.length > 0 ? [[[NSImage alloc] initWithData:output] autorelease] : nil;
+            if (image != nil) {
+                pictures[deviceName] = image;
+                pictureTimes[deviceName] = [NSDate date];
+                [output writeToURL:pictureFile(deviceName) atomically:YES];
+                if (waiting[key] == shown) {
+                    view.image = image;
+                }
+            }
+        });
     }
     NSProgressIndicator* turning = [[[NSProgressIndicator alloc] initWithFrame:NSMakeRect(NSMidX(content.bounds) - 16, NSMidY(content.bounds) - 4, 32, 32)] autorelease];
     turning.style = NSProgressIndicatorStyleSpinning;

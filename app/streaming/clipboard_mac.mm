@@ -20,8 +20,10 @@
 static NSString* s_Destination;
 static bool s_Linux;
 static dispatch_queue_t s_Queue; // one transfer at a time, in order
-static NSString* s_Last;         // the text both sides had when last we looked; main thread
-static NSInteger s_Count = -1;   // the pasteboard's change count then
+// Main thread only:
+static NSString* s_Both;       // the text both sides are known to have
+static NSInteger s_Seen = -1;  // this Mac's pasteboard change count when it last had nothing more to send
+static NSInteger s_Turn;       // counts this app's comings to the front
 
 // Runs ssh with a command for the other machine, gives it `input` and returns
 // what it printed, or nil if it failed. Not on the main thread.
@@ -81,32 +83,46 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
 // To the front: what was copied here since last time goes over.
 - (void)toFront:(NSNotification*)note
 {
+    s_Turn++; // a pull still on its way is from before this, and is dropped
     NSPasteboard* board = NSPasteboard.generalPasteboard;
-    if (board.changeCount == s_Count) {
-        return;
-    }
-    s_Count = board.changeCount;
-    // Not what a password manager marked as not to be kept or passed on.
-    if ([board.types containsObject:@"org.nspasteboard.ConcealedType"] || [board.types containsObject:@"org.nspasteboard.TransientType"]) {
+    NSInteger count = board.changeCount;
+    if (count == s_Seen) {
         return;
     }
     NSString* text = [board stringForType:NSPasteboardTypeString];
     NSData* bytes = [text dataUsingEncoding:NSUTF8StringEncoding];
-    if (bytes.length == 0 || bytes.length > CLIPBOARD_MAX_BYTES || [text isEqualToString:s_Last]) {
+    // Nothing to send: no text, too much of it, what the other side has
+    // already, or what a password manager marked as not to be passed on.
+    if (bytes.length == 0 || bytes.length > CLIPBOARD_MAX_BYTES || [text isEqualToString:s_Both] ||
+            [board.types containsObject:@"org.nspasteboard.ConcealedType"] || [board.types containsObject:@"org.nspasteboard.TransientType"]) {
+        s_Seen = count;
         return;
     }
-    [s_Last release];
-    s_Last = [text copy];
     // wl-copy stays behind to serve the clipboard, and would hold the pipe open.
     NSString* command = s_Linux ? [k_Wayland stringByAppendingString:@"wl-copy >/dev/null 2>&1"] : @"/usr/bin/pbcopy";
     dispatch_async(s_Queue, ^{
-        remote(command, bytes);
+        bool sent = remote(command, bytes) != nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // Only once it is over there is it what both sides have. One that
+            // did not arrive is tried again the next time this comes to the
+            // front, and until then nothing from there may replace it.
+            if (sent) {
+                [s_Both release];
+                s_Both = [text copy];
+                s_Seen = count;
+            }
+        });
     });
 }
 
 // From the front: what was copied there comes back.
 - (void)fromFront:(NSNotification*)note
 {
+    NSInteger count = NSPasteboard.generalPasteboard.changeCount;
+    if (count != s_Seen) {
+        return; // something copied here has not got there yet: it is the newer
+    }
+    NSInteger turn = s_Turn;
     NSString* command = s_Linux ? [k_Wayland stringByAppendingString:@"wl-paste -n -t text 2>/dev/null"] : @"/usr/bin/pbpaste";
     dispatch_async(s_Queue, ^{
         NSData* got = remote(command, nil);
@@ -116,15 +132,16 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             NSPasteboard* board = NSPasteboard.generalPasteboard;
-            // Unless something was copied here meanwhile: that is the newer.
-            if ([text isEqualToString:s_Last] || board.changeCount != s_Count) {
+            // Not if this app has been to the front again since it was asked
+            // for, nor if something was copied here meanwhile.
+            if (turn != s_Turn || board.changeCount != count || [text isEqualToString:s_Both]) {
                 return;
             }
             [board clearContents];
             [board setString:text forType:NSPasteboardTypeString];
-            s_Count = board.changeCount;
-            [s_Last release];
-            s_Last = [text copy];
+            s_Seen = board.changeCount;
+            [s_Both release];
+            s_Both = [text copy];
         });
     });
 }
