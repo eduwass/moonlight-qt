@@ -6,6 +6,7 @@
 // slower. This names the path in the log when a session starts and in the
 // statistics overlay (Ctrl+Alt+Shift+S).
 
+#include <atomic>
 #include <thread>
 #include <QHostInfo>
 #include <QHostAddress>
@@ -21,8 +22,11 @@
 #include "SDL_compat.h"
 
 static char s_Path[96] = "unknown";
-static int s_Link = CHROME_OTHER;
-static bool s_Relayed;
+// Written by the thread that looks a name up, read by the stream's. (s_Path
+// too; a reader may catch it half written, never unterminated: its last byte
+// is never anything but 0.)
+static std::atomic<int> s_Link{CHROME_OTHER};
+static std::atomic<bool> s_Relayed;
 
 int netPathLink() { return s_Link; }
 bool netPathRelayed() { return s_Relayed; }

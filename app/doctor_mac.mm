@@ -199,7 +199,7 @@ struct Diagnosis {
 
 static Diagnosis examine(NSDictionary* device)
 {
-    Diagnosis d = {[NSMutableArray array], 0, @""};
+    Diagnosis d = {[NSMutableArray array], -1, @""}; // -1: nothing found out that a bitrate could be advised from
     NSString* host = device[@"address"];
 
     // Where it is.
@@ -314,6 +314,7 @@ static Diagnosis examine(NSDictionary* device)
     NSProgressIndicator* spinner;
     NSTextView* report;
     NSInteger suggested;
+    bool checking;
     NSString* examined;
 }
 - (void)examine:(NSString*)device;
@@ -333,7 +334,7 @@ static Diagnosis examine(NSDictionary* device)
     if (selected != nil) {
         [which selectItemWithTitle:selected];
     }
-    run.enabled = which.numberOfItems > 0;
+    run.enabled = which.numberOfItems > 0 && !checking;
 }
 
 - (void)viewDidMoveToWindow
@@ -365,6 +366,10 @@ static Diagnosis examine(NSDictionary* device)
     if (device == nil) {
         return;
     }
+    if (checking) {
+        return; // one at a time: two would finish in any order, and the report be either's
+    }
+    checking = true;
     run.enabled = NO;
     apply.hidden = YES;
     [spinner startAnimation:nil];
@@ -399,12 +404,13 @@ static Diagnosis examine(NSDictionary* device)
         dispatch_async(dispatch_get_main_queue(), ^{
             [report.textStorage setAttributedString:text];
             [spinner stopAnimation:nil];
+            checking = false;
             run.enabled = YES;
             suggested = kbps;
             [examined release];
             examined = [device[@"name"] retain];
             NSInteger has = [device[@"bitrate"] integerValue];
-            apply.hidden = has == kbps;
+            apply.hidden = kbps < 0 || has == kbps;
             apply.title = kbps > 0 ? [NSString stringWithFormat:@"Set %@ to at most %ld Mbps", examined, (long)(kbps / 1000)]
                                    : [NSString stringWithFormat:@"Set %@ back to automatic", examined];
         });
