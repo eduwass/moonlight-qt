@@ -47,21 +47,30 @@ static void saveDevices()
     dockMenuChanged();
 }
 
-// A device with its window's place and size as they are saved now: its stream,
-// a process of its own, writes them as the window is moved, after this one
-// read the list.
+// Where a device's window was left, and how large: a setting of its own per
+// device, written by the device's stream (a process of its own) as the window
+// is moved. Not in the list of devices: that one is written whole, by the
+// device window, and two processes writing it would undo each other's changes.
+static NSString* placementKey(NSString* name)
+{
+    return [@"Window." stringByAppendingString:name ?: @""];
+}
+
+// The device, with its window's place and size as they are saved now.
+static void place(NSMutableDictionary* device)
+{
+    NSDictionary* saved = [NSUserDefaults.standardUserDefaults dictionaryForKey:placementKey(device[@"name"])];
+    for (NSString* key in @[@"windowLeft", @"windowTop", @"windowWidth", @"windowHeight"]) {
+        if ([saved[key] isKindOfClass:[NSNumber class]]) {
+            device[key] = saved[key];
+        }
+    }
+}
+
 static NSMutableDictionary* withPlacement(NSDictionary* device)
 {
     NSMutableDictionary* placed = [[device mutableCopy] autorelease];
-    for (NSDictionary* saved in [NSUserDefaults.standardUserDefaults arrayForKey:k_Devices]) {
-        if ([saved[@"name"] isEqual:device[@"name"]]) {
-            for (NSString* key in @[@"windowLeft", @"windowTop", @"windowWidth", @"windowHeight"]) {
-                if (saved[key] != nil) {
-                    placed[key] = saved[key];
-                }
-            }
-        }
-    }
+    place(placed);
     return placed;
 }
 
@@ -321,6 +330,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     if (device == nil) {
         return;
     }
+    place(device); // the window's size as its stream left it
     NSString* deviceName = device[@"name"] ?: @"";
     title.stringValue = deviceName;
     // The form as saved, unless a field of it is being typed in: what is in
@@ -566,6 +576,19 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         device[fixed ? @"width" : @"windowWidth"] = @(width.integerValue);
         device[fixed ? @"height" : @"windowHeight"] = @(height.integerValue);
     }
+    // The window's place goes with the device under its new name, and its size is the one typed here.
+    {
+        NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+        NSMutableDictionary* placement = [[[defaults dictionaryForKey:placementKey(oldName)] mutableCopy] autorelease];
+        if (placement != nil) {
+            if (device[@"windowWidth"] != nil && device[@"windowHeight"] != nil) {
+                placement[@"windowWidth"] = device[@"windowWidth"];
+                placement[@"windowHeight"] = device[@"windowHeight"];
+            }
+            [defaults removeObjectForKey:placementKey(oldName)];
+            [defaults setObject:placement forKey:placementKey(device[@"name"])];
+        }
+    }
     device[@"truePixels"] = @(truePixels.state == NSControlStateValueOn);
     device[@"rawColor"] = @(rawColor.state == NSControlStateValueOn);
     device[@"noSound"] = @(noSound.state == NSControlStateValueOn);
@@ -612,6 +635,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse response) {
         if (response == NSAlertFirstButtonReturn) {
             [window makeFirstResponder:nil]; // nothing typed for this one is left to land on the next
+            [NSUserDefaults.standardUserDefaults removeObjectForKey:placementKey(device[@"name"])];
             [s_Devices removeObject:device];
             saveDevices();
             [table reloadData];
@@ -1385,20 +1409,15 @@ static void rereadDevices()
 
 void managerSetDeviceWindow(NSString* name, long left, long top, long width, long height)
 {
-    if (s_Manager == nil) {
-        rereadDevices(); // a stream's process: the device window's is the one that edits
+    NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+    NSMutableDictionary* placement = [[[defaults dictionaryForKey:placementKey(name)] mutableCopy] autorelease] ?: [NSMutableDictionary dictionary];
+    placement[@"windowLeft"] = @(left);
+    placement[@"windowTop"] = @(top);
+    if (width > 0 && height > 0) {
+        placement[@"windowWidth"] = @(width);
+        placement[@"windowHeight"] = @(height);
     }
-    for (NSMutableDictionary* device in managerDevices()) {
-        if ([device[@"name"] isEqualToString:name]) {
-            device[@"windowLeft"] = @(left);
-            device[@"windowTop"] = @(top);
-            if (width > 0 && height > 0) {
-                device[@"windowWidth"] = @(width);
-                device[@"windowHeight"] = @(height);
-            }
-        }
-    }
-    saveDevices();
+    [defaults setObject:placement forKey:placementKey(name)];
 }
 
 void managerSetDeviceBitrate(NSString* name, long kbps)

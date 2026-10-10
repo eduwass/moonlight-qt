@@ -752,6 +752,7 @@ static bool chromeTakes(int key, bool down, int sdlMods)
     NSWindow* window;
     NSTimer* end;
     id awake; // while out of sight: see closeAsked
+    NSTimer* awayTimer; // while the screen is locked or asleep: see away:
     NSDate* startedAt;
     bool hidden;
 }
@@ -967,7 +968,8 @@ bool chromeUnseen()
         // the screen is unlocked and when the displays wake, but not in an
         // order to be relied on, and a stream left undrawn for a notification
         // that never came would stay black.
-        [NSTimer scheduledTimerWithTimeInterval:2 target:self selector:@selector(stillAway:) userInfo:nil repeats:YES];
+        [awayTimer invalidate]; // one that has not yet seen the last time end
+        awayTimer = [NSTimer scheduledTimerWithTimeInterval:2 target:self selector:@selector(stillAway:) userInfo:nil repeats:YES];
     }
     s_Away = true;
 }
@@ -976,6 +978,9 @@ bool chromeUnseen()
     [self back:nil];
     if (!s_Away) {
         [timer invalidate];
+        if (awayTimer == timer) {
+            awayTimer = nil;
+        }
     }
 }
 - (void)back:(NSNotification*)note

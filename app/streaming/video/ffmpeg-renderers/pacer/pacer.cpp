@@ -52,7 +52,12 @@ Pacer::Pacer(IFFmpegRenderer* renderer, PVIDEO_STATS videoStats) :
 
 Pacer::~Pacer()
 {
+    // Fork: under the lock the threads wait with, or one that has just seen
+    // "not stopping" and is about to wait would miss the wake below and
+    // never be joined.
+    m_FrameQueueLock.lock();
     m_Stopping = true;
+    m_FrameQueueLock.unlock();
 
     // Stop the V-sync thread
     if (m_VsyncThread != nullptr) {

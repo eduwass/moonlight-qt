@@ -521,7 +521,10 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
     if (device.length == 0 || device.length > 100) {
         device = @"stream";
     }
-    NSURL* fresh = [caches URLByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-%@.new", device]];
+    static long arrivals; // only ever here, on the one queue
+    // (The folder they are unpacked into is this arrival's own: what is done
+    // with it on the main thread, later, must not be done to the next one's.)
+    NSURL* fresh = [caches URLByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-%@.new%ld", device, ++arrivals]];
     NSURL* folder = [caches URLByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-%@", device]];
     [manager removeItemAtURL:fresh error:nil];
     NSArray<NSString*>* names = [manager createDirectoryAtURL:fresh withIntermediateDirectories:YES attributes:nil error:nil] ? unpack(archive, fresh.path) : nil;
@@ -543,6 +546,7 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
         }
         [manager removeItemAtURL:folder error:nil];
         if (![manager moveItemAtURL:fresh toURL:folder error:nil]) {
+            [manager removeItemAtURL:fresh error:nil];
             return;
         }
         NSMutableArray<NSURL*>* files = [NSMutableArray array];
