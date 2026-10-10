@@ -304,7 +304,8 @@ static int fetchOverSsh(void* destination)
                                @"-o", @"ControlMaster=auto", @"-o", [NSString stringWithFormat:@"ControlPath=%@/.ssh/cm-%%C", NSHomeDirectory()],
                                @"-o", @"ControlPersist=600", @"--", host,
                                // Exactly one Sunshine, or none of this: the helper would tell the wrong one.
-                               @"p=$(pgrep -x sunshine); case \"$p\" in ''|*[!0-9]*) exit 1;; esac; exec ~/.local/bin/cursor-share --stdio $p"];
+                               // (On the PC the service runs its own build, whose name the system cuts short.)
+                               @"p=$(pgrep -x sunshine || pgrep -x sunshine-probe-); case \"$p\" in ''|*[!0-9]*) exit 1;; esac; exec ~/.local/bin/cursor-share --stdio $p"];
             NSPipe* out = [NSPipe pipe];
             task.standardOutput = out;
             // Its input is held open and never written to: that being closed
@@ -335,6 +336,15 @@ static int fetchOverSsh(void* destination)
             if (counted) {
                 SDL_AtomicAdd(&s_Connected, -1);
             }
+            if (s_Plain) {
+                // A host whose pointer here is a plain arrow when it sends no
+                // shapes: the arrow again, not the last shape for good.
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (SDL_AtomicGet(&s_Connected) == 0) {
+                        SDL_SetCursor(SDL_GetDefaultCursor());
+                    }
+                });
+            }
             [hold.fileHandleForWriting closeFile]; // the helper sees its input closed and goes
             [task terminate];
             [task waitUntilExit];
@@ -360,15 +370,17 @@ bool cursorShareWaiting()
 // Called on the main thread when a session starts.
 void cursorShareStart(const char* host)
 {
-    // A Linux host has no helper (see the hosts page): its cursor is hidden by
-    // its own prep command, and the pointer here is a plain arrow at once.
+    // A Linux host's cursor is hidden by its own prep command, and the pointer
+    // here is a plain arrow at once. It may have a helper all the same (see the
+    // hosts page), asked for over ssh like a Mac's: then the arrow takes the
+    // shapes it sends, and is the arrow again when it stops.
     s_Plain = getenv("MOONLIGHT_CHROME") != nullptr && strstr(getenv("MOONLIGHT_CHROME"), "linux") != nullptr;
     SDL_strlcpy(s_Host, host, sizeof(s_Host));
     // SDL destroyed the last session's cursors when it shut its video down.
     s_Cursor = nullptr;
     const char* destination = getenv("MOONLIGHT_CLIPBOARD");
     NSCharacterSet* other = [[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_@"] invertedSet];
-    bool overSsh = !s_Plain && destination != nullptr && destination[0] != 0 && destination[0] != '-' && strlen(destination) <= 128 &&
+    bool overSsh = destination != nullptr && destination[0] != 0 && destination[0] != '-' && strlen(destination) <= 128 &&
                    [@(destination) rangeOfCharacterFromSet:other].location == NSNotFound;
     // One way or the other, for the life of the app: over ssh where the device
     // has a destination for it, else the helper's own connection to us.
