@@ -6,6 +6,7 @@
 // slower. This names the path in the log when a session starts and in the
 // statistics overlay (Ctrl+Alt+Shift+S).
 
+#include <QHostInfo>
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -97,14 +98,25 @@ void netPathUpdate(const QString& host)
     s_Link = CHROME_OTHER;
     s_Relayed = false;
 
-    // Only for a literal address: a name would have to be resolved, which can
-    // block, and could resolve to another address than the stream uses.
+    // A name is resolved first. The stream has just resolved it itself, so the
+    // answer is at hand and is the one it got (a Tailscale name, when the home
+    // network's address did not answer: the bar should still say which way).
+    QString at = host;
+    if (QHostAddress(host).isNull()) {
+        const QHostInfo info = QHostInfo::fromName(host);
+        for (const QHostAddress& address : info.addresses()) {
+            if (address.protocol() == QAbstractSocket::IPv4Protocol) {
+                at = address.toString();
+                break;
+            }
+        }
+    }
     QHostAddress local;
-    if (!QHostAddress(host).isNull()) {
+    if (!QHostAddress(at).isNull()) {
         // Connecting a UDP socket sends nothing. It only makes the system
         // choose the local address it would reach the host from.
         QUdpSocket probe;
-        probe.connectToHost(host, 47998);
+        probe.connectToHost(at, 47998);
         probe.waitForConnected(1000);
         local = probe.localAddress();
     }
@@ -118,7 +130,7 @@ void netPathUpdate(const QString& host)
         }
     }
 
-    if (s_Link == CHROME_TAILSCALE && tailscaleRelays(host)) {
+    if (s_Link == CHROME_TAILSCALE && tailscaleRelays(at)) {
         s_Relayed = true;
         via += ", relayed";
     }
