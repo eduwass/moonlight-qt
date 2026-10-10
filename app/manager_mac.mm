@@ -659,12 +659,18 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     }
     NSAlert* alert = [[[NSAlert alloc] init] autorelease];
     alert.messageText = [NSString stringWithFormat:@"Remove “%@” from the list?", device[@"name"]];
-    alert.informativeText = @"Its pairing stays, so adding it again needs no new PIN.";
+    bool streaming = device[@"name"] != nil && [running containsObject:device[@"name"]];
+    alert.informativeText = streaming ? @"Its stream ends. Its pairing stays, so adding it again needs no new PIN." : @"Its pairing stays, so adding it again needs no new PIN.";
     [alert addButtonWithTitle:@"Remove"];
     [alert addButtonWithTitle:@"Cancel"];
     [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse response) {
         if (response == NSAlertFirstButtonReturn) {
             [window makeFirstResponder:nil]; // nothing typed for this one is left to land on the next
+            // Its stream goes with it: left there, it would be no device's,
+            // and go on saving where its window is under a name now free.
+            if (device[@"name"] != nil && [running containsObject:device[@"name"]]) {
+                tellStream(device[@"name"], @"end");
+            }
             [NSUserDefaults.standardUserDefaults removeObjectForKey:placementKey(device[@"name"])];
             [s_Devices removeObject:device];
             saveDevices();
