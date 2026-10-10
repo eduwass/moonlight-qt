@@ -263,7 +263,11 @@ static int fetchOverSsh(void* destination)
                                @"p=$(pgrep -x sunshine | head -1); [ -n \"$p\" ] && exec ~/.local/bin/cursor-share --stdio $p"];
             NSPipe* out = [NSPipe pipe];
             task.standardOutput = out;
-            task.standardInput = [NSFileHandle fileHandleWithNullDevice];
+            // Its input is held open and never written to: that being closed
+            // is how the helper knows this end has gone (sshd tells a command
+            // nothing else), also when this app dies without a word.
+            NSPipe* hold = [NSPipe pipe];
+            task.standardInput = hold;
             task.standardError = [NSFileHandle fileHandleWithNullDevice];
             if (![task launchAndReturnError:nil]) {
                 continue;
@@ -279,7 +283,8 @@ static int fetchOverSsh(void* destination)
                 SDL_AtomicAdd(&s_Connected, -1);
             }
             SDL_AtomicSet(&s_OverSsh, 0);
-            [task terminate]; // the helper sees its output closed and goes
+            [hold.fileHandleForWriting closeFile]; // the helper sees its input closed and goes
+            [task terminate];
             [task waitUntilExit];
         }
     }
