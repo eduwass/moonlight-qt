@@ -15,6 +15,8 @@
 #include "chrome_keys.h"
 #include "manager.h"
 
+void clipboardShareStart(); // clipboard_mac.mm
+
 #include "SDL_compat.h"
 #include <SDL_syswm.h>
 
@@ -958,6 +960,7 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         [bar addSubview:light];
         s_Lights[i] = light;
     }
+    clipboardShareStart();
     // MOONLIGHT_WINDOW_AT=left,top (Cocoa's screen coordinates): where the
     // device's window was left the last time. Once, as the stream opens, and
     // only if enough of it would be on a screen to get hold of: the monitor it

@@ -412,6 +412,7 @@ macx {
     SOURCES += \
         streaming/dynres_mac.mm \
         streaming/cursorshare_mac.mm \
+        streaming/clipboard_mac.mm \
         streaming/chrome_mac.mm \
         streaming/chrome_settings_mac.mm \
         manager_mac.mm \

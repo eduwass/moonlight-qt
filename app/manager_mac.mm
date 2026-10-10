@@ -17,6 +17,7 @@
 //   fpsRule                "pixels:above:below", see dynres.cpp (MOONLIGHT_FPS_ABOVE)
 //   bitrate                kbps, 0 for Moonlight's own choice
 //   screenshot             a shell command that writes a picture of the device's screen to stdout
+//   clipboard              an ssh destination: the clipboard is shared with it (clipboard_mac.mm)
 //   before                 a shell command run before connecting (wake, unlock); if its last line of
 //                          output is an address, the stream goes there instead
 
@@ -173,6 +174,7 @@ static void tellStream(NSString* name, NSString* what)
     NSTextField* bitrate;
     NSTextField* screenshot;
     NSTextField* before;
+    NSTextField* clipboard;
     NSMutableDictionary<NSString*, DeviceStatus*>* statuses; // by address
     NSMutableDictionary<NSString*, NSImage*>* pictures;       // by device name
     NSMutableDictionary<NSString*, NSDate*>* pictureTimes;
@@ -186,6 +188,7 @@ static void tellStream(NSString* name, NSString* what)
 
 @interface ManagerController ()
 - (void)show;
+- (void)reread;
 @end
 
 static ManagerController* s_Manager;
@@ -321,6 +324,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     bitrate.stringValue = [device[@"bitrate"] integerValue] > 0 ? [device[@"bitrate"] stringValue] : @"";
     screenshot.stringValue = device[@"screenshot"] ?: @"";
     before.stringValue = device[@"before"] ?: @"";
+    clipboard.stringValue = device[@"clipboard"] ?: @"";
 
     DeviceStatus* status = statuses[device[@"address"] ?: @""];
     bool streaming = [running containsObject:deviceName];
@@ -465,8 +469,16 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 - (void)windowDidBecomeKey:(NSNotification*)notification
 {
-    // The devices may have been changed from elsewhere meanwhile: a stream's
-    // own settings window is another process (its doctor can set a bitrate).
+    [self reread];
+    [self ask];
+    [self shoot:NO];
+}
+
+// The devices may have been changed from elsewhere since they were read: a
+// stream is another process (it writes where its window is left, its doctor
+// can set a bitrate). Before anything is done with them.
+- (void)reread
+{
     NSArray* saved = [NSUserDefaults.standardUserDefaults arrayForKey:k_Devices];
     // Not while a field is being typed in: what is in it has not been saved yet.
     if (saved != nil && ![saved isEqualToArray:s_Devices] && ![window.firstResponder isKindOfClass:[NSText class]]) {
@@ -481,8 +493,6 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         }
         [self show];
     }
-    [self ask];
-    [self shoot:NO];
 }
 
 - (void)windowWillClose:(NSNotification*)notification
@@ -518,6 +528,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     device[@"bitrate"] = @(MIN(500000, MAX(0, bitrate.integerValue)));
     device[@"screenshot"] = screenshot.stringValue;
     device[@"before"] = before.stringValue;
+    device[@"clipboard"] = [clipboard.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
     saveDevices();
     if (![oldName isEqualToString:device[@"name"]]) {
         NSInteger selected = table.selectedRow;
@@ -760,6 +771,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         if (fixed) environment[@"MOONLIGHT_FOLLOW"] = @"0";
         if (!fixed && [device[@"truePixels"] boolValue]) environment[@"MOONLIGHT_PANEL_PIXELS"] = @"1";
         if ([device[@"rawColor"] boolValue]) environment[@"MOONLIGHT_RAW_COLOR"] = @"1";
+        if ([device[@"clipboard"] length] > 0) environment[@"MOONLIGHT_CLIPBOARD"] = device[@"clipboard"];
         if ([device[@"localCursor"] boolValue]) environment[@"MOONLIGHT_LOCAL_CURSOR"] = @"1";
         [self launch:arguments environment:environment for:deviceName];
     };
@@ -810,6 +822,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 - (BOOL)open:(NSURL*)url
 {
+    [self reread];
     NSURLComponents* parts = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
     if ([parts.host isEqualToString:@"settings"]) {
         [self settings:nil];
@@ -1051,6 +1064,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     NSStackView* bitrateRow = [NSStackView stackViewWithViews:@[bitrate, label(@"kbps. Leave empty to let Moonlight choose; lower it on a weak connection.", 11, NSFontWeightRegular, NSColor.secondaryLabelColor)]];
     screenshot = [self field:@"A shell command that writes a picture of its screen to stdout"];
     before = [self field:@"A shell command to run first: wake it, unlock it (optional)"];
+    clipboard = [self field:@"me@its-name: share the clipboard with it over ssh (optional)"];
 
     NSGridView* form = [NSGridView gridViewWithViews:@[
         @[label(@"Name", 13, NSFontWeightRegular, NSColor.labelColor), name],
@@ -1061,6 +1075,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         @[label(@"Bitrate", 13, NSFontWeightRegular, NSColor.labelColor), bitrateRow],
         @[label(@"Screenshot", 13, NSFontWeightRegular, NSColor.labelColor), screenshot],
         @[label(@"Before connecting", 13, NSFontWeightRegular, NSColor.labelColor), before],
+        @[label(@"Clipboard", 13, NSFontWeightRegular, NSColor.labelColor), clipboard],
     ]];
     form.rowSpacing = 8;
     form.columnSpacing = 10;
