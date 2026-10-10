@@ -1170,21 +1170,23 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         NSInteger w = size.count == 2 ? number(size[0], 320, 8192) : -1, h = size.count == 2 ? number(size[1], 200, 8192) : -1;
         bool isSize = w > 0 && h > 0;
         bool on = [item.value isEqualToString:@"1"] || [item.value isEqualToString:@"on"] || [item.value isEqualToString:@"true"];
+        // On or off said in so many words; anything else says nothing, and the device's own holds.
+        bool said = on || [item.value isEqualToString:@"0"] || [item.value isEqualToString:@"off"] || [item.value isEqualToString:@"false"];
         if ([item.name isEqualToString:@"size"] && isSize) {
             device[@"windowWidth"] = @(w);
             device[@"windowHeight"] = @(h);
             device[@"sizeOnce"] = @YES; // for this stream only: not to be remembered as the device's
         }
-        else if ([item.name isEqualToString:@"fixed"]) {
+        else if ([item.name isEqualToString:@"fixed"] && (isSize || said)) {
             device[@"fixed"] = @(isSize || on);
             if (isSize) {
                 device[@"width"] = @(w);
                 device[@"height"] = @(h);
             }
         }
-        else if ([item.name isEqualToString:@"truepixels"]) device[@"truePixels"] = @(on);
-        else if ([item.name isEqualToString:@"raw"]) device[@"rawColor"] = @(on);
-        else if ([item.name isEqualToString:@"pointer"]) device[@"localCursor"] = @(on);
+        else if ([item.name isEqualToString:@"truepixels"] && said) device[@"truePixels"] = @(on);
+        else if ([item.name isEqualToString:@"raw"] && said) device[@"rawColor"] = @(on);
+        else if ([item.name isEqualToString:@"pointer"] && said) device[@"localCursor"] = @(on);
         else if ([item.name isEqualToString:@"bitrate"]) {
             NSInteger kbps = [item.value isEqualToString:@"0"] ? 0 : number(item.value, 500, 500000);
             if (kbps >= 0) device[@"bitrate"] = @(kbps);
