@@ -193,6 +193,7 @@ static void tellStream(NSString* name, NSString* what)
     int shooting; // screenshots on their way
     NSMutableDictionary<NSString*, NSWindow*>* waiting; // by device id: what is shown where a stream is about to be
     NSMutableDictionary<NSString*, NSNumber*>* asking;   // by device id: a "show" not yet answered by its stream
+    NSMutableDictionary<NSString*, NSNumber*>* launched; // by device id: the process of the stream last started for it
 }
 @end
 
@@ -321,24 +322,30 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     }
     NSString* deviceName = device[@"name"] ?: @"";
     title.stringValue = deviceName;
-    name.stringValue = deviceName;
-    address.stringValue = device[@"address"] ?: @"";
-    [system selectItemAtIndex:[device[@"system"] isEqualToString:@"linux"] ? 1 : 0];
-    bool fixed = [device[@"fixed"] boolValue];
-    [size selectItemAtIndex:fixed ? 1 : 0];
-    width.stringValue = [NSString stringWithFormat:@"%ld", (long)([device[fixed ? @"width" : @"windowWidth"] integerValue] ?: (fixed ? 3840 : 1920))];
-    height.stringValue = [NSString stringWithFormat:@"%ld", (long)([device[fixed ? @"height" : @"windowHeight"] integerValue] ?: (fixed ? 2160 : 1080))];
-    width.toolTip = height.toolTip = fixed ? @"The stream's size, in pixels" : @"The window to open, in points";
-    truePixels.state = [device[@"truePixels"] boolValue];
-    truePixels.enabled = !fixed;
-    rawColor.state = [device[@"rawColor"] boolValue];
-    localCursor.state = [device[@"localCursor"] boolValue];
-    // What it is on that kind of machine, so that a pointer that never changes shape is no surprise.
-    localCursor.title = [device[@"system"] isEqualToString:@"linux"] ? @"Instant pointer (plain arrow)" : @"Instant pointer";
-    bitrate.stringValue = [device[@"bitrate"] integerValue] > 0 ? [device[@"bitrate"] stringValue] : @"";
-    screenshot.stringValue = device[@"screenshot"] ?: @"";
-    before.stringValue = device[@"before"] ?: @"";
-    clipboard.stringValue = device[@"clipboard"] ?: @"";
+    // The form as saved, unless a field of it is being typed in: what is in
+    // that field is not saved yet (it is when the field is left), and this is
+    // also called for news that has nothing to do with the form: a stream
+    // that has started or gone, a device that answers again.
+    if (![window.firstResponder isKindOfClass:[NSText class]]) {
+        name.stringValue = deviceName;
+        address.stringValue = device[@"address"] ?: @"";
+        [system selectItemAtIndex:[device[@"system"] isEqualToString:@"linux"] ? 1 : 0];
+        bool fixed = [device[@"fixed"] boolValue];
+        [size selectItemAtIndex:fixed ? 1 : 0];
+        width.stringValue = [NSString stringWithFormat:@"%ld", (long)([device[fixed ? @"width" : @"windowWidth"] integerValue] ?: (fixed ? 3840 : 1920))];
+        height.stringValue = [NSString stringWithFormat:@"%ld", (long)([device[fixed ? @"height" : @"windowHeight"] integerValue] ?: (fixed ? 2160 : 1080))];
+        width.toolTip = height.toolTip = fixed ? @"The stream's size, in pixels" : @"The window to open, in points";
+        truePixels.state = [device[@"truePixels"] boolValue];
+        truePixels.enabled = !fixed;
+        rawColor.state = [device[@"rawColor"] boolValue];
+        localCursor.state = [device[@"localCursor"] boolValue];
+        // What it is on that kind of machine, so that a pointer that never changes shape is no surprise.
+        localCursor.title = [device[@"system"] isEqualToString:@"linux"] ? @"Instant pointer (plain arrow)" : @"Instant pointer";
+        bitrate.stringValue = [device[@"bitrate"] integerValue] > 0 ? [device[@"bitrate"] stringValue] : @"";
+        screenshot.stringValue = device[@"screenshot"] ?: @"";
+        before.stringValue = device[@"before"] ?: @"";
+        clipboard.stringValue = device[@"clipboard"] ?: @"";
+    }
 
     DeviceStatus* status = statuses[device[@"address"] ?: @""];
     bool streaming = [running containsObject:deviceName];
@@ -428,6 +435,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     if (deviceName != nil) {
         tellStream(deviceName, @"end");
         [running removeObject:deviceName];
+        dockMenuChanged();
         [self reloadList];
         [self show];
     }
@@ -769,9 +777,17 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 - (void)streamGone:(NSNotification*)note
 {
-    if ([note.object isKindOfClass:[NSString class]]) {
-        [self stream:note.object runs:false];
+    if (![note.object isKindOfClass:[NSString class]]) {
+        return;
     }
+    // Not the going of an older stream of this device, when a newer one has
+    // been started since: each says which process it is.
+    NSNumber* gone = note.userInfo[@"pid"], *current = launched[note.object];
+    if (gone != nil && current != nil && ![gone isEqual:current]) {
+        return;
+    }
+    [launched removeObjectForKey:note.object];
+    [self stream:note.object runs:false];
 }
 
 // A stream has said it has a picture, or that it is on its way out: the list,
@@ -812,6 +828,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         dispatch_async(dispatch_get_main_queue(), ^{
             if (app != nil && deviceName != nil) {
                 [running addObject:deviceName];
+                launched[deviceId(deviceName)] = @(app.processIdentifier);
                 dockMenuChanged();
             }
             else if (deviceName != nil) {
@@ -1124,6 +1141,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     starting = [[NSMutableSet alloc] init];
     waiting = [[NSMutableDictionary alloc] init];
     asking = [[NSMutableDictionary alloc] init];
+    launched = [[NSMutableDictionary alloc] init];
     [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(streamShown:) name:@"dev.eduwass.moonlight-next.shown" object:nil
                                             suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
     [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(streamUp:) name:@"dev.eduwass.moonlight-next.up" object:nil

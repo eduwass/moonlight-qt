@@ -332,83 +332,75 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
     if (count == s_Seen || count == s_Sending) {
         return;
     }
+    // Only what kinds of thing it holds are asked here. What it holds is read
+    // on the queue below: for something copied on another Apple device, macOS
+    // fetches it over the network at that moment, and this is the thread the
+    // stream's window and keys live on.
+    NSArray<NSPasteboardType>* types = board.types;
     // What macOS itself brought here from another Mac (Universal Clipboard
     // marks it so) is not sent on to a Mac: it most likely came from that one,
-    // and macOS does the same errand between the two anyway.
-    if (!s_Linux && [board.types containsObject:@"com.apple.is-remote-clipboard"]) {
+    // and macOS does the same errand between the two anyway. Nor what a
+    // password manager marked as not to be passed on, to anyone.
+    if ((!s_Linux && [types containsObject:@"com.apple.is-remote-clipboard"]) ||
+            [types containsObject:@"org.nspasteboard.ConcealedType"] || [types containsObject:@"org.nspasteboard.TransientType"]) {
         s_Seen = count;
         return;
     }
-    // Files first: the Finder puts their names on the pasteboard as text too,
-    // and a name is not what was copied.
-    NSArray<NSURL*>* copied = [board readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
-    if (copied.count > 0) {
-        NSArray<NSURL*>* files = sendable(copied);
-        NSString* key = files != nil ? filesKey(files) : nil;
-        if (files == nil || [key isEqualToString:s_BothFiles] ||
-                [board.types containsObject:@"org.nspasteboard.ConcealedType"] || [board.types containsObject:@"org.nspasteboard.TransientType"]) {
-            s_Seen = count; // nothing to send: a folder, too much, or what is there already
-            return;
-        }
-        NSString* command = s_Linux ? [k_Wayland stringByAppendingString:k_LinuxSetFiles] : k_MacSetFiles;
-        s_Sending = count;
-        dispatch_async(s_Queue, ^{
-            @autoreleasepool {
-                NSData* archive = pack(files);
-                bool sent = archive != nil && remote(command, archive, 0, CLIPBOARD_SECONDS(archive.length)) != nil;
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: %lu files, %lu bytes %s", (unsigned long)files.count,
-                            (unsigned long)archive.length, sent ? "sent" : "could not be sent; they are tried again the next time");
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (s_Sending == count) {
-                        s_Sending = -1;
-                    }
-                    if (sent) {
-                        [s_Both release];
-                        [s_BothPicture release];
-                        [s_BothFiles release];
-                        s_Both = nil;
-                        s_BothPicture = nil;
-                        s_BothFiles = [key copy];
-                        s_Seen = count;
-                    }
-                });
-            }
-        });
-        return;
-    }
-    NSString* text = [board stringForType:NSPasteboardTypeString];
-    NSData* textBytes = [text dataUsingEncoding:NSUTF8StringEncoding];
-    // A picture and no text: a screenshot, an image copied from a page.
-    NSData* png = textBytes.length == 0 ? [board dataForType:NSPasteboardTypePNG] : nil;
-    NSData* tiff = textBytes.length == 0 && png == nil ? [board dataForType:NSPasteboardTypeTIFF] : nil;
-    bool isPicture = png != nil || tiff != nil;
-    // Nothing to send: neither of them, too much of it, what the other side
-    // has already, or what a password manager marked as not to be passed on.
-    if ((textBytes.length == 0 && !isPicture) || textBytes.length > CLIPBOARD_MAX_BYTES || tiff.length > CLIPBOARD_MAX_TIFF ||
-            (textBytes.length != 0 && [text isEqualToString:s_Both]) ||
-            [board.types containsObject:@"org.nspasteboard.ConcealedType"] || [board.types containsObject:@"org.nspasteboard.TransientType"]) {
-        s_Seen = count;
-        return;
-    }
-    // wl-copy stays behind to serve the clipboard, and would hold the pipe open.
-    NSString* command = s_Linux ? [k_Wayland stringByAppendingString:isPicture ? @"wl-copy -t image/png >/dev/null 2>&1" : @"wl-copy >/dev/null 2>&1"] :
-        !isPicture ? @"/usr/bin/pbcopy" :
-        @"f=$(mktemp); cat > $f; osascript -e \"set the clipboard to (read (POSIX file \\\"$f\\\") as «class PNGf»)\"; r=$?; rm -f $f; exit $r";
-    NSData* both = [[s_BothPicture retain] autorelease];
+    NSString* bothText = [[s_Both copy] autorelease];
+    NSData* bothPicture = [[s_BothPicture retain] autorelease];
+    NSString* bothFiles = [[s_BothFiles copy] autorelease];
     s_Sending = count;
     dispatch_async(s_Queue, ^{
         @autoreleasepool {
-            // Making a PNG of a large picture takes a moment: not on the main thread.
-            NSData* picture = png ?: (tiff != nil ? [[NSBitmapImageRep imageRepWithData:tiff] representationUsingType:NSBitmapImageFileTypePNG properties:@{}] : nil);
-            NSData* bytes = isPicture ? picture : textBytes;
-            // No: there is nothing more to send. Yes: only if it got there.
-            bool wanted = bytes.length != 0 && bytes.length <= (isPicture ? CLIPBOARD_MAX_PICTURE : CLIPBOARD_MAX_BYTES) &&
-                          !(isPicture && [picture isEqualToData:both]);
+            NSPasteboard* from = NSPasteboard.generalPasteboard;
+            // What there is to send, in this order: files (the Finder puts
+            // their names there as text too, and a name is not what was
+            // copied), text, a picture (a screenshot, an image from a page).
+            NSArray<NSURL*>* copied = [from readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+            NSArray<NSURL*>* files = copied.count > 0 ? sendable(copied) : nil;
+            NSString* key = files != nil ? filesKey(files) : nil;
+            NSString* text = copied.count > 0 ? nil : [from stringForType:NSPasteboardTypeString];
+            NSData* textBytes = [text dataUsingEncoding:NSUTF8StringEncoding];
+            NSData* picture = nil;
+            if (copied.count == 0 && textBytes.length == 0) {
+                picture = [from dataForType:NSPasteboardTypePNG];
+                NSData* tiff = picture == nil ? [from dataForType:NSPasteboardTypeTIFF] : nil;
+                if (tiff != nil && tiff.length <= CLIPBOARD_MAX_TIFF) {
+                    picture = [[NSBitmapImageRep imageRepWithData:tiff] representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+                }
+            }
+            NSData* bytes = nil;
+            NSString* command = nil;
+            const char* what = "";
+            // (Nothing: a folder among the files, too many, too much; text or a
+            // picture too large; or what the other side has already.)
+            if (files != nil && ![key isEqualToString:bothFiles]) {
+                bytes = pack(files);
+                command = s_Linux ? [k_Wayland stringByAppendingString:k_LinuxSetFiles] : k_MacSetFiles;
+                what = "files";
+            }
+            else if (copied.count == 0 && textBytes.length != 0 && textBytes.length <= CLIPBOARD_MAX_BYTES && ![text isEqualToString:bothText]) {
+                bytes = textBytes;
+                // wl-copy stays behind to serve the clipboard, and would hold the pipe open.
+                command = s_Linux ? [k_Wayland stringByAppendingString:@"wl-copy >/dev/null 2>&1"] : @"/usr/bin/pbcopy";
+                what = "text";
+            }
+            else if (picture.length != 0 && picture.length <= CLIPBOARD_MAX_PICTURE && ![picture isEqualToData:bothPicture]) {
+                bytes = picture;
+                command = s_Linux ? [k_Wayland stringByAppendingString:@"wl-copy -t image/png >/dev/null 2>&1"] :
+                    @"f=$(mktemp); cat > $f; osascript -e \"set the clipboard to (read (POSIX file \\\"$f\\\") as «class PNGf»)\"; r=$?; rm -f $f; exit $r";
+                what = "a picture";
+            }
+            // Copied over while it was being read: the next coming to the front has the new one.
+            bool stale = from.changeCount != count;
+            bool wanted = !stale && bytes.length != 0;
             bool sent = wanted && remote(command, bytes, 0, CLIPBOARD_SECONDS(bytes.length)) != nil;
             if (wanted) {
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: %s of %lu bytes %s", isPicture ? "a picture" : "text",
-                            (unsigned long)bytes.length, sent ? "sent" : "could not be sent; it is tried again the next time");
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: %s, %lu bytes, %s", what, (unsigned long)bytes.length,
+                            sent ? "sent" : "could not be sent; tried again the next time");
             }
+            bool isFiles = files != nil && bytes != nil && command != nil && strcmp(what, "files") == 0;
+            bool isPicture = strcmp(what, "a picture") == 0;
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (s_Sending == count) {
                     s_Sending = -1;
@@ -420,11 +412,11 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
                     [s_Both release];
                     [s_BothPicture release];
                     [s_BothFiles release];
-                    s_Both = isPicture ? nil : [text copy];
-                    s_BothPicture = [picture copy];
-                    s_BothFiles = nil;
+                    s_Both = isFiles || isPicture ? nil : [text copy];
+                    s_BothPicture = isPicture ? [picture copy] : nil;
+                    s_BothFiles = isFiles ? [key copy] : nil;
                 }
-                if (sent || !wanted) {
+                if (sent || (!wanted && !stale)) {
                     s_Seen = count;
                 }
             });
