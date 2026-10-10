@@ -780,7 +780,11 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         go(device[@"address"]);
         return;
     }
-    runShell(device[@"before"], 8, ^(NSData* output) {
+    // MOONLIGHT_POINTER tells the command whether this Mac will draw the
+    // pointer (Instant pointer): a host that cannot say so by itself must then
+    // keep its cursor out of the picture (see pc-wake in dotfiles).
+    NSString* command = [NSString stringWithFormat:@"export MOONLIGHT_POINTER=%d; %@", [device[@"localCursor"] boolValue] ? 1 : 0, device[@"before"]];
+    runShell(command, 8, ^(NSData* output) {
         // An address on the last line it printed is where to go instead.
         NSString* text = [[[NSString alloc] initWithData:output ?: [NSData data] encoding:NSUTF8StringEncoding] autorelease];
         NSString* last = [[text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] componentsSeparatedByString:@"\n"].lastObject;
@@ -1056,7 +1060,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     NSStackView* sizeRow = [NSStackView stackViewWithViews:@[size, width, label(@"×", 13, NSFontWeightRegular, NSColor.secondaryLabelColor), height]];
     truePixels = [self check:@"True Pixels" tip:@"The stream has as many pixels as the monitor's panel, not as many as macOS draws. Faster on a scaled display."];
     rawColor = [self check:@"Raw colours" tip:@"Show the device's colour values as they are, as its own cable to this monitor would. For a desktop tuned by eye on this monitor."];
-    localCursor = [self check:@"Instant pointer" tip:@"This Mac draws the pointer itself, so it moves with the hand. Needs the cursor helper on the device (macOS hosts)."];
+    localCursor = [self check:@"Instant pointer" tip:@"This Mac draws the pointer itself, so it moves with the hand. A Mac with the cursor helper shows its own cursor shapes; a Hyprland PC set up for it shows a plain arrow."];
     NSStackView* checks = [NSStackView stackViewWithViews:@[truePixels, rawColor, localCursor]];
     checks.spacing = 16;
     bitrate = [self field:@"automatic"];
