@@ -752,11 +752,14 @@ static bool chromeTakes(int key, bool down, int sdlMods)
 @end
 
 static ChromeWarm* s_Warm;
-static std::atomic<bool> s_Unseen; // read by the thread that draws
+// Read by the thread that draws. Out of sight is a warm stream's window put
+// away, or any stream's window with nothing of it showing: minimised, wholly
+// behind other windows, on another Space (macOS says so: occlusionState).
+static std::atomic<bool> s_Unseen, s_Covered;
 
 bool chromeUnseen()
 {
-    return s_Unseen;
+    return s_Unseen || s_Covered;
 }
 
 @implementation ChromeWarm
@@ -832,6 +835,12 @@ bool chromeUnseen()
     [NSApp hide:nil];
     if (seconds > 0) {
         end = [NSTimer scheduledTimerWithTimeInterval:seconds target:self selector:@selector(timeUp:) userInfo:nil repeats:NO];
+    }
+}
+- (void)coverChanged:(NSNotification*)note
+{
+    if (note.object == window) {
+        s_Covered = !(window.occlusionState & NSWindowOcclusionStateVisible);
     }
 }
 - (void)becameActive:(NSNotification*)note
@@ -921,10 +930,12 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     if (s_Warm == nil) {
         s_Warm = [[ChromeWarm alloc] init];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(becameActive:) name:NSApplicationDidBecomeActiveNotification object:nil];
+        [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(coverChanged:) name:NSWindowDidChangeOcclusionStateNotification object:nil];
         [NSDistributedNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(told:) name:@"dev.eduwass.moonlight-next.stream" object:nil
                                                 suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
     }
     [s_Warm rest]; // whatever the last session left: its timer, its hold on App Nap
+    s_Covered = false;
     s_Warm->hidden = false;
     s_Warm->window = w;
     s_Lights[0].target = s_Warm;
