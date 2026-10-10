@@ -564,15 +564,25 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         return;
     }
     NSString* oldName = [[device[@"name"] retain] autorelease];
+    place(device); // the window's size as its stream has left it since the form was filled
     bool fixed = size.indexOfSelectedItem == 1;
+    // A window's size is taken from the form only when it was typed: what the
+    // form shows may be older than what the stream has saved since.
+    bool sized = fixed || sender == width || sender == height;
     bool wasFixed = [device[@"fixed"] boolValue];
-    if (name.stringValue.length > 0) {
+    // (Not another device's name: a link would find only one of the two, and
+    // they would share where their windows were left.)
+    bool taken = false;
+    for (NSDictionary* each in s_Devices) {
+        taken |= each != device && each[@"name"] != nil && [each[@"name"] caseInsensitiveCompare:name.stringValue] == NSOrderedSame;
+    }
+    if (name.stringValue.length > 0 && !taken) {
         device[@"name"] = name.stringValue;
     }
     device[@"address"] = [address.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
     device[@"system"] = system.indexOfSelectedItem == 1 ? @"linux" : @"mac";
     device[@"fixed"] = @(fixed);
-    if (fixed == wasFixed && width.integerValue >= 320 && height.integerValue >= 200 && width.integerValue <= 8192 && height.integerValue <= 8192) {
+    if (sized && fixed == wasFixed && width.integerValue >= 320 && height.integerValue >= 200 && width.integerValue <= 8192 && height.integerValue <= 8192) {
         device[fixed ? @"width" : @"windowWidth"] = @(width.integerValue);
         device[fixed ? @"height" : @"windowHeight"] = @(height.integerValue);
     }
@@ -581,7 +591,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
         NSMutableDictionary* placement = [[[defaults dictionaryForKey:placementKey(oldName)] mutableCopy] autorelease];
         if (placement != nil) {
-            if (device[@"windowWidth"] != nil && device[@"windowHeight"] != nil) {
+            if (sized && !fixed && device[@"windowWidth"] != nil && device[@"windowHeight"] != nil) {
                 placement[@"windowWidth"] = device[@"windowWidth"];
                 placement[@"windowHeight"] = device[@"windowHeight"];
             }

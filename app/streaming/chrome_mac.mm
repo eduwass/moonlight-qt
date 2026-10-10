@@ -789,6 +789,24 @@ static bool screenAway()
 }
 
 static std::atomic<bool> s_Connection;
+static bool s_SoundOwed; // started without sound for a locked screen (main.cpp), and to have it once unlocked
+
+// The screen is there (again), or a session has started with it there: if the
+// stream is owed its sound, connect again, a moment later, when the output can
+// be opened. Still owed if by then the screen is away again or the stream is
+// connecting: both end with this being called once more.
+static void soundIfOwed()
+{
+    if (!s_SoundOwed) {
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (s_SoundOwed && s_Action != nullptr && s_Connection && !s_Away) {
+            s_SoundOwed = false;
+            s_Action(CHROME_SOUND);
+        }
+    });
+}
 
 void chromeConnection(bool up)
 {
@@ -990,17 +1008,7 @@ bool chromeUnseen()
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "The screen is there again");
         s_Away = false;
         [self moved:nil]; // a whole new picture
-        // A stream started while the screen was locked has no sound (main.cpp).
-        // Now it can: connect again, a moment later, when the output is there.
-        const char* driver = getenv("SDL_AUDIODRIVER");
-        if (driver != nullptr && strcmp(driver, "dummy") == 0 && getenv("MOONLIGHT_NO_SOUND") == nullptr) {
-            unsetenv("SDL_AUDIODRIVER");
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                if (s_Action != nullptr && s_Connection && !s_Away) {
-                    s_Action(CHROME_SOUND);
-                }
-            });
-        }
+        soundIfOwed();
     }
 }
 - (void)spaceChanged:(NSNotification*)note
@@ -1188,10 +1196,19 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     s_Covered = false;
     // How things are now, at every session's start: a stream can be started
     // with the screen locked (a link from a script, a schedule).
+    static bool asked;
+    if (!asked) {
+        asked = true;
+        const char* driver = getenv("SDL_AUDIODRIVER");
+        s_SoundOwed = driver != nullptr && strcmp(driver, "dummy") == 0 && getenv("MOONLIGHT_NO_SOUND") == nullptr;
+    }
+    s_Connection = true; // a session's window is made once its connection is up
     if (screenAway()) {
         [s_Warm away:nil];
     }
-    s_Connection = true; // a session's window is made once its connection is up
+    else {
+        soundIfOwed(); // unlocked while this was connecting, with nobody watching for it yet
+    }
     [s_Warm->startedAt release];
     s_Warm->startedAt = [[NSDate date] retain];
     s_Warm->hidden = false;
