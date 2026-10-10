@@ -1457,9 +1457,16 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     if (!hiddenOnce && getenv("MOONLIGHT_HIDDEN") != nullptr) {
         hiddenOnce = true;
         dispatch_async(dispatch_get_main_queue(), ^{
-            if ([s_Warm live] && !s_Warm->hidden) {
-                [s_Warm closeAsked:nil];
+            if (![s_Warm live] || s_Warm->hidden) {
+                return;
             }
+            if (s_Warm->window.styleMask & NSWindowStyleMaskFullScreen) {
+                // Fullscreen from its start: there is no keeping that out of sight
+                // (closing it ends it). It is shown, as it would have been.
+                [s_Warm show:true];
+                return;
+            }
+            [s_Warm closeAsked:nil];
         });
     }
     if ([NSUserDefaults.standardUserDefaults boolForKey:@"TitleBar"] && !(w.styleMask & NSWindowStyleMaskFullScreen)) {

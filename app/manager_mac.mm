@@ -201,6 +201,7 @@ static void tellStream(NSString* name, NSString* what)
     NSMutableDictionary<NSString*, NSDate*>* pictureTimes;
     NSMutableSet<NSString*>* running; // the devices with a stream open or warm, as of the last look
     NSMutableSet<NSString*>* starting; // the devices whose stream is on its way: one start at a time each
+    NSMutableSet<NSString*>* showWhenUp; // of those started out of sight, the ones asked for since: shown once they are there
     NSButton* endStream;
     int shooting; // screenshots on their way
     NSMutableDictionary<NSString*, NSWindow*>* waiting; // by device id: what is shown where a stream is about to be
@@ -893,6 +894,11 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     if ([note.object isKindOfClass:[NSString class]]) {
         [self waited:note.object];
         [self stream:note.object runs:true];
+        if ([showWhenUp containsObject:note.object]) {
+            [showWhenUp removeObject:note.object];
+            [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.stream" object:note.object
+                                                                        userInfo:@{@"do": @"show"} deliverImmediately:YES];
+        }
     }
 }
 
@@ -1004,7 +1010,13 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         return;
     }
     if ([starting containsObject:deviceName]) {
-        return; // a second press, or a second link, while the first is at work
+        // A second press, or a second link, while the first is at work. If the
+        // first was a start out of sight (a device kept ready), this one wants
+        // to see it: it is shown as soon as it says it is there.
+        if (![device[@"outOfSight"] boolValue]) {
+            [showWhenUp addObject:deviceId(deviceName)];
+        }
+        return;
     }
     if (streamRuns(deviceName)) {
         tellStream(deviceName, @"show");
@@ -1272,6 +1284,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     pictureTimes = [[NSMutableDictionary alloc] init];
     running = [[NSMutableSet alloc] init];
     starting = [[NSMutableSet alloc] init];
+    showWhenUp = [[NSMutableSet alloc] init];
     waiting = [[NSMutableDictionary alloc] init];
     asking = [[NSMutableDictionary alloc] init];
     launched = [[NSMutableDictionary alloc] init];

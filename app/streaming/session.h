@@ -308,7 +308,9 @@ private:
 
 public:
     // Fork: the stream's sound is not played (a window out of sight: chrome_mac.mm).
-    void setAudioMuted(bool muted) { m_AudioMuted = muted; }
+    // (Its own flag, read by the thread that plays: Moonlight's is for its "mute when not in front", and set by that.)
+    void setAudioMuted(bool muted) { m_HiddenMuted = muted; }
+    std::atomic<bool> m_HiddenMuted{false};
     // Fork: the host ended the stream, and said so (no error). Any thread.
     static std::atomic<bool> s_HostEnded;
     // Fork: counts the connections this session has had (dynres.cpp makes new
