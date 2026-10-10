@@ -39,9 +39,12 @@ static NSString* const k_MoonlightSuite = @"com.moonlight-stream.Moonlight";
 
 static NSMutableArray<NSMutableDictionary*>* s_Devices;
 
+static void dockMenuChanged();
+
 static void saveDevices()
 {
     [NSUserDefaults.standardUserDefaults setObject:s_Devices forKey:k_Devices];
+    dockMenuChanged();
 }
 
 // A device with its window's place and size as they are saved now: its stream,
@@ -196,6 +199,7 @@ static void tellStream(NSString* name, NSString* what)
 @interface ManagerController ()
 - (void)show;
 - (void)reread;
+- (void)fillDockMenu:(NSMenu*)menu;
 @end
 
 static ManagerController* s_Manager;
@@ -501,6 +505,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
             [table selectRowIndexes:[NSIndexSet indexSetWithIndex:selected] byExtendingSelection:NO];
         }
         [self show];
+        dockMenuChanged();
     }
 }
 
@@ -702,6 +707,33 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     last = [note.object copy];
     lastAt = now;
     managerOpenUrl([note.object UTF8String]);
+}
+
+// ---- the Dock icon's menu: the devices, to connect to (or bring forward) from there
+
+- (void)fillDockMenu:(NSMenu*)menu
+{
+    [menu removeAllItems];
+    for (NSDictionary* device in s_Devices) {
+        NSString* deviceName = device[@"name"];
+        if (deviceName.length == 0 || [device[@"address"] length] == 0) {
+            continue;
+        }
+        NSMenuItem* item = [[[NSMenuItem alloc] initWithTitle:deviceName action:@selector(dockConnect:) keyEquivalent:@""] autorelease];
+        item.target = self;
+        item.representedObject = deviceName;
+        [menu addItem:item];
+    }
+}
+
+- (void)dockConnect:(NSMenuItem*)item
+{
+    for (NSDictionary* device in s_Devices) {
+        if ([device[@"name"] isEqual:item.representedObject]) {
+            [self start:withPlacement(device)];
+            return;
+        }
+    }
 }
 
 - (void)streamShown:(NSNotification*)note
@@ -1393,6 +1425,18 @@ void managerBeforeLaunch()
     }
 }
 
+// The menu is made again whenever the list of devices is saved or read again,
+// and not when the Dock asks for it: as the menu's delegate, filling it at
+// that moment, the app was "not responding" to the Dock (tried).
+static NSMenu* s_DockMenu;
+
+static void dockMenuChanged()
+{
+    if (s_Manager != nil && s_DockMenu != nil) {
+        [s_Manager fillDockMenu:s_DockMenu];
+    }
+}
+
 void managerAlert(const char* text)
 {
     NSAlert* alert = [[[NSAlert alloc] init] autorelease];
@@ -1469,6 +1513,16 @@ void managerStart()
         item.action = @selector(settings:);
         item.hidden = NO;
         item.enabled = YES;
+        // The devices in the Dock icon's menu. Qt's application delegate hands
+        // the Dock the menu it is given with setDockMenu:.
+        // ponytail: that is Qt's own class (QCocoaApplicationDelegate); if a
+        // later Qt has no such method, there is no such menu and nothing else changes.
+        id delegate = NSApp.delegate;
+        if ([delegate respondsToSelector:NSSelectorFromString(@"setDockMenu:")]) {
+            s_DockMenu = [[NSMenu alloc] init];
+            [s_Manager fillDockMenu:s_DockMenu];
+            [delegate performSelector:NSSelectorFromString(@"setDockMenu:") withObject:s_DockMenu];
+        }
     });
     // Started by a link to a device, the app shows that device's stream and
     // not this window (the Dock icon brings it up). macOS says which kind of
