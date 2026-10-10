@@ -250,7 +250,7 @@ static int fetchOverSsh(void* destination)
 {
     NSString* host = (NSString*)destination; // kept for good
     for (;;) {
-        sleep(3); // the helper's own connection first, if it can
+        sleep(1); // the helper's own connection first, if it can: it dials within a second of the launch
         if (SDL_AtomicGet(&s_Serving) != 0 || s_Plain) {
             continue;
         }
