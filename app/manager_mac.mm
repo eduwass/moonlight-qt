@@ -25,6 +25,7 @@
 #import <Cocoa/Cocoa.h>
 
 void chromeSettingsOpen(const char* host);
+void chromeSettingsDoctor(const char* device);
 
 static NSString* const k_Devices = @"Devices";
 static NSString* const k_MoonlightSuite = @"com.moonlight-stream.Moonlight";
@@ -434,6 +435,21 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 - (void)windowDidBecomeKey:(NSNotification*)notification
 {
+    // The devices may have been changed from elsewhere meanwhile: a stream's
+    // own settings window is another process (its doctor can set a bitrate).
+    NSArray* saved = [NSUserDefaults.standardUserDefaults arrayForKey:k_Devices];
+    if (saved != nil && ![saved isEqualToArray:s_Devices] && window.firstResponder == window) {
+        NSInteger selected = table.selectedRow;
+        [s_Devices removeAllObjects];
+        for (NSDictionary* each in saved) {
+            [s_Devices addObject:[[each mutableCopy] autorelease]];
+        }
+        [table reloadData];
+        if (selected >= 0 && selected < (NSInteger)s_Devices.count) {
+            [table selectRowIndexes:[NSIndexSet indexSetWithIndex:selected] byExtendingSelection:NO];
+        }
+        [self show];
+    }
     [self ask];
     [self shoot:NO];
 }
@@ -648,6 +664,14 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     [self launch:@[] environment:@{@"MOONLIGHT_CLASSIC": @"1"} for:nil];
 }
 
+- (void)check:(id)sender
+{
+    NSString* deviceName = [self device][@"name"];
+    if (deviceName != nil) {
+        chromeSettingsDoctor(deviceName.UTF8String);
+    }
+}
+
 - (void)settings:(id)sender
 {
     chromeSettingsOpen([[self device][@"name"] UTF8String] ?: "");
@@ -860,7 +884,10 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     endStream = [NSButton buttonWithTitle:@"End Stream" target:self action:@selector(end:)];
     endStream.controlSize = NSControlSizeLarge;
     endStream.hidden = YES;
-    NSStackView* head = [NSStackView stackViewWithViews:@[names, endStream, connect]];
+    NSButton* check = [NSButton buttonWithTitle:@"Check Link" target:self action:@selector(check:)];
+    check.controlSize = NSControlSizeLarge;
+    check.toolTip = @"Have the doctor look at the way to this device and say what it can carry";
+    NSStackView* head = [NSStackView stackViewWithViews:@[names, check, endStream, connect]];
     head.distribution = NSStackViewDistributionFill;
     [names setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 

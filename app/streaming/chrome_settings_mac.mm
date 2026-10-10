@@ -322,6 +322,10 @@ static NSString* const k_PaneSymbols[PANE_COUNT] = {@"gearshape", @"dial.medium"
 }
 @end
 
+void settingsDoctorExamine(NSView* pane, NSString* device); // doctor_mac.mm
+
+static NSWindow* s_SettingsWindow;
+
 void chromeSettingsOpen(const char* host)
 {
     static NSWindow* window;
@@ -369,4 +373,14 @@ void chromeSettingsOpen(const char* host)
     view.needsDisplay = YES;
     [NSApp activateIgnoringOtherApps:YES];
     [window makeKeyAndOrderFront:nil];
+    s_SettingsWindow = window;
+}
+
+// Opens the settings at the doctor and has it examine a device.
+void chromeSettingsDoctor(const char* device)
+{
+    chromeSettingsOpen(device);
+    ChromeSettingsView* view = (ChromeSettingsView*)s_SettingsWindow.contentView;
+    [view choose:PANE_DOCTOR];
+    settingsDoctorExamine(view->panes[PANE_DOCTOR], @(device));
 }

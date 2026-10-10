@@ -316,6 +316,7 @@ static Diagnosis examine(NSDictionary* device)
     NSInteger suggested;
     NSString* examined;
 }
+- (void)examine:(NSString*)device;
 @end
 
 @implementation DoctorPane
@@ -408,6 +409,15 @@ static Diagnosis examine(NSDictionary* device)
                                    : [NSString stringWithFormat:@"Set %@ back to automatic", examined];
         });
     });
+}
+
+- (void)examine:(NSString*)device
+{
+    [self fill];
+    if ([which itemWithTitle:device] != nil && run.enabled) {
+        [which selectItemWithTitle:device];
+        [self run:nil];
+    }
 }
 
 - (void)apply:(id)sender
@@ -523,4 +533,12 @@ NSView* settingsQualityPane(NSRect frame)
 NSView* settingsDoctorPane(NSRect frame)
 {
     return [[[DoctorPane alloc] initWithFrame:frame] autorelease];
+}
+
+// Examines a device at once: for the device window's Check Link.
+void settingsDoctorExamine(NSView* pane, NSString* device)
+{
+    if ([pane isKindOfClass:[DoctorPane class]]) {
+        [(DoctorPane*)pane examine:device];
+    }
 }
