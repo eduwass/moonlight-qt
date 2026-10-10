@@ -11,6 +11,7 @@
 // One line of text, then the picture:  <width> <height> <hot x> <hot y> <bytes>\n<PNG>
 // Sizes are in points; the PNG may hold more pixels than that (a 2x cursor).
 
+#include <fcntl.h>
 #include "SDL_compat.h"
 #include "chrome.h"
 
@@ -177,6 +178,9 @@ static void serve(FILE* in, bool* counted = nullptr)
 static int listenForCursors(void*)
 {
     int listener = socket(AF_INET, SOCK_STREAM, 0);
+    // Not for a process this one becomes (main.cpp tries a dropped stream once
+    // more as itself): the port would be held with nobody listening.
+    fcntl(listener, F_SETFD, FD_CLOEXEC);
     int yes = 1;
     setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     struct sockaddr_in any = {};
@@ -199,6 +203,7 @@ static int listenForCursors(void*)
         if (fd < 0) {
             continue;
         }
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
         char from[INET_ADDRSTRLEN] = "";
         inet_ntop(AF_INET, &peer.sin_addr, from, sizeof(from));
         if (strcmp(from, s_Host) != 0) {
@@ -290,6 +295,7 @@ static int fetchOverSsh(void* destination)
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Cursor shapes: asking the host for them over ssh");
             }
             int copy = dup(out.fileHandleForReading.fileDescriptor);
+            fcntl(copy, F_SETFD, FD_CLOEXEC);
             FILE* in = copy >= 0 ? fdopen(copy, "r") : nullptr;
             bool counted = false;
             if (in != nullptr) {

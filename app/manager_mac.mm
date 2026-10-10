@@ -576,6 +576,9 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     for (NSDictionary* each in s_Devices) {
         taken |= each != device && each[@"name"] != nil && [each[@"name"] caseInsensitiveCompare:name.stringValue] == NSOrderedSame;
     }
+    // (Nor a new name while its stream is there: the stream goes by the name
+    // it was started with, and would no longer be this device's.)
+    taken |= [running containsObject:oldName] && ![name.stringValue isEqualToString:oldName];
     if (name.stringValue.length > 0 && !taken) {
         device[@"name"] = name.stringValue;
     }
