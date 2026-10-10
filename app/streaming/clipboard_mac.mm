@@ -26,6 +26,7 @@
 
 #include <fcntl.h>
 #include <sys/time.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #define CLIPBOARD_MAX_BYTES (1024 * 1024)
@@ -160,7 +161,8 @@ static NSData* pack(NSArray<NSURL*>* files)
     NSTask* task = [[[NSTask alloc] init] autorelease];
     task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/tar"];
     // -n: what was a file and is a folder by now is not gone into.
-    NSMutableArray* arguments = [NSMutableArray arrayWithArray:@[@"-cnf", @"-"]];
+    // (--no-xattrs: what the files carry beside their contents stays here.)
+    NSMutableArray* arguments = [NSMutableArray arrayWithArray:@[@"--no-xattrs", @"-cnf", @"-"]];
     for (NSURL* file in files) {
         // "./": a name is a name, whatever it begins with (tar reads -x as an
         // option and @x as an archive to take entries from).
@@ -251,21 +253,39 @@ static NSArray<NSString*>* unpack(NSData* archive, NSString* folder)
         if (kind == 'x' || kind == 'L') {
             // The next file's name in full: "<length> path=<name>\n" among
             // other such lines, or the name itself.
-            NSString* text = [[[NSString alloc] initWithBytes:bytes + data length:(NSUInteger)size encoding:NSUTF8StringEncoding] autorelease];
             if (kind == 'L') {
+                NSString* text = [[[NSString alloc] initWithBytes:bytes + data length:(NSUInteger)size encoding:NSUTF8StringEncoding] autorelease];
                 longName = [text componentsSeparatedByString:k_Nul].firstObject; // it ends with one
+                bad |= text == nil;
             }
             else {
-                for (NSString* line in [text componentsSeparatedByString:@"\n"]) {
-                    NSRange path = [line rangeOfString:@" path="];
-                    if (path.location != NSNotFound) {
-                        longName = [line substringFromIndex:NSMaxRange(path)];
+                // Records of "<length> <key>=<value>\n", the length counting
+                // all of it. Read as bytes, each by its length: a value can
+                // be anything (a Mac's tar puts a file's extended attributes
+                // here as they are, and a text that had to be valid as a
+                // whole refused every such file).
+                const unsigned char* records = bytes + data;
+                size_t end = (size_t)size, from = 0;
+                while (!bad && from < end) {
+                    size_t count = 0, digits = from;
+                    while (digits < end && records[digits] >= '0' && records[digits] <= '9' && count < (1 << 28)) {
+                        count = count * 10 + (records[digits++] - '0');
+                    }
+                    if (digits == from || digits >= end || records[digits] != ' ' || count <= digits - from + 1 || count > end - from || records[from + count - 1] != '\n') {
+                        bad = true;
+                        break;
+                    }
+                    const unsigned char* pair = records + digits + 1;
+                    size_t pairLength = from + count - 1 - (digits + 1);
+                    if (pairLength >= 5 && memcmp(pair, "path=", 5) == 0) {
+                        longName = [[[NSString alloc] initWithBytes:pair + 5 length:pairLength - 5 encoding:NSUTF8StringEncoding] autorelease];
+                        bad |= longName == nil;
                     }
                     // A size given here is one this does not go by: the header's has been checked against what is there.
-                    bad |= [line rangeOfString:@" size="].location != NSNotFound;
+                    bad |= pairLength >= 5 && memcmp(pair, "size=", 5) == 0;
+                    from += count;
                 }
             }
-            bad |= text == nil;
         }
         else if (kind == 'g') {
             // settings for the whole archive: nothing here needs them
@@ -334,7 +354,7 @@ static NSString* const k_LinuxListFiles = @(R"SH([ "$(wl-paste -l 2>/dev/null | 
 static NSString* const k_SendFilesOr = @(R"SH(set --; n=0; bad=0; while IFS= read -r f; do [ -n "$f" ] || continue; [ -f "$f" ] || { bad=1; continue; }; n=$((n + $(wc -c < "$f"))); set -- "$@" -C "$(dirname "$f")" "./$(basename "$f")"; done <<LIST
 $l
 LIST
-if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then echo files; COPYFILE_DISABLE=1 tar -cf - "$@"; exit; fi; [ -z "$l" ] || exit 0; )SH");
+if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then echo files; COPYFILE_DISABLE=1 tar --no-xattrs -cf - "$@"; exit; fi; [ -z "$l" ] || exit 0; )SH");
 
 @interface ClipboardShare : NSObject
 @end
@@ -618,3 +638,85 @@ void clipboardShareStart()
     }
     [share performSelector:@selector(settled) withObject:nil afterDelay:1.5];
 }
+
+// The archive reader against what it must take and what it must refuse.
+// Not in the app: built and run by itself, with tar making the archives
+// (scripts/check-clipboard.sh, on a Mac with the build's SDL headers).
+#ifdef CLIPBOARD_SELFTEST
+static NSData* tarOf(NSString* in, NSArray<NSString*>* arguments)
+{
+    NSTask* task = [[[NSTask alloc] init] autorelease];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/tar"];
+    task.currentDirectoryURL = [NSURL fileURLWithPath:in];
+    task.arguments = [@[@"-cf", @"-"] arrayByAddingObjectsFromArray:arguments];
+    NSMutableDictionary* environment = [[NSProcessInfo.processInfo.environment mutableCopy] autorelease];
+    environment[@"COPYFILE_DISABLE"] = @"1";
+    task.environment = environment;
+    NSPipe* out = [NSPipe pipe];
+    task.standardOutput = out;
+    task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    [task launchAndReturnError:nil];
+    NSData* archive = [out.fileHandleForReading readDataToEndOfFile];
+    [task waitUntilExit];
+    return archive;
+}
+
+int main()
+{
+    @autoreleasepool {
+        NSFileManager* manager = NSFileManager.defaultManager;
+        NSString* root = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-selftest-%d", getpid()]];
+        NSString* from = [root stringByAppendingPathComponent:@"from"], *inner = [from stringByAppendingPathComponent:@"folder"];
+        [manager createDirectoryAtPath:inner withIntermediateDirectories:YES attributes:nil error:nil];
+        [@"one" writeToFile:[from stringByAppendingPathComponent:@"a file.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        [[NSMutableData dataWithLength:70000] writeToFile:[from stringByAppendingPathComponent:@"b.bin"] atomically:YES];
+        [@"deep" writeToFile:[inner stringByAppendingPathComponent:@"c.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        symlink("/etc/hosts", [from stringByAppendingPathComponent:@"link"].fileSystemRepresentation);
+        NSString* longName = [[@"" stringByPaddingToLength:150 withString:@"n" startingAtIndex:0] stringByAppendingString:@".txt"];
+        [@"long" writeToFile:[from stringByAppendingPathComponent:longName] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+        __block int failed = 0, run = 0;
+        // What unpacking `archive` gives, in a folder of its own that is empty before.
+        NSArray<NSString*>* (^into)(NSData*, NSString**) = ^NSArray<NSString*>*(NSData* archive, NSString** where) {
+            NSString* to = [root stringByAppendingPathComponent:[NSString stringWithFormat:@"to%d", run++]];
+            [manager createDirectoryAtPath:to withIntermediateDirectories:YES attributes:nil error:nil];
+            if (where != nullptr) {
+                *where = to;
+            }
+            return unpack(archive, to);
+        };
+        void (^check)(bool, const char*) = ^(bool ok, const char* what) {
+            printf("%s  %s\n", ok ? "ok  " : "FAIL", what);
+            failed += ok ? 0 : 1;
+        };
+
+        NSString* to = nil;
+        NSArray<NSString*>* names = into(tarOf(from, @[@"./a file.txt", @"./b.bin", [@"./" stringByAppendingString:longName]]), &to);
+        check(names.count == 3 && [[NSString stringWithContentsOfFile:[to stringByAppendingPathComponent:@"a file.txt"] encoding:NSUTF8StringEncoding error:nil] isEqual:@"one"] &&
+              [[manager attributesOfItemAtPath:[to stringByAppendingPathComponent:@"b.bin"] error:nil] fileSize] == 70000 &&
+              [manager fileExistsAtPath:[to stringByAppendingPathComponent:longName]], "plain files at the top are taken, a long name too");
+        // As a Mac's tar sends a file that has an extended attribute: with a header of its own, the attribute in it as it is.
+        const unsigned char raw[] = {0x00, 0xff, 0x80, 0xfe};
+        setxattr([from stringByAppendingPathComponent:@"b.bin"].fileSystemRepresentation, "com.example.raw", raw, sizeof(raw), 0, 0);
+        names = into(tarOf(from, @[@"./b.bin", [@"./" stringByAppendingString:longName]]), &to);
+        check(names.count == 2 && [manager fileExistsAtPath:[to stringByAppendingPathComponent:longName]], "a file with an extended attribute is taken");
+        check(into(tarOf(from, @[@"./a file.txt", @"./folder"]), nullptr) == nil, "a folder among them: none");
+        check(into(tarOf(from, @[@"./a file.txt", @"./link"]), nullptr) == nil, "a link among them: none");
+        check(into(tarOf(from, @[@"./a file.txt", @"./a file.txt"]), nullptr) == nil, "the same name twice: none");
+        names = into(tarOf(from, @[@"-s", @"|^\\./a file|../escaped|", @"./a file.txt"]), &to);
+        check(names == nil && ![manager fileExistsAtPath:[[to stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"escaped.txt"]], "a name that leads out of the folder: none, and nothing written there");
+        names = into(tarOf(from, @[@"-P", [from stringByAppendingPathComponent:@"a file.txt"]]), nullptr);
+        check(names == nil, "a name given in full from the root: none");
+        NSMutableData* cut = [[tarOf(from, @[@"./b.bin"]) mutableCopy] autorelease];
+        cut.length = 2000;
+        check(into(cut, nullptr) == nil, "an archive cut short: none");
+        check(into([NSData dataWithBytes:"not an archive at all" length:21], nullptr) == nil, "not an archive: none");
+        NSData* packed = pack(@[[NSURL fileURLWithPath:[from stringByAppendingPathComponent:@"a file.txt"]], [NSURL fileURLWithPath:[from stringByAppendingPathComponent:@"b.bin"]]]);
+        check(packed != nil && into(packed, nullptr).count == 2, "what this side packs, this side takes");
+
+        [manager removeItemAtPath:root error:nil];
+        printf(failed == 0 ? "clipboard self-check: ok\n" : "clipboard self-check: %d failed\n", failed);
+        return failed;
+    }
+}
+#endif
