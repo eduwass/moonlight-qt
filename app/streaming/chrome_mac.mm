@@ -868,6 +868,75 @@ void chromeConnection(bool up)
     }
 }
 
+// A tiling window manager gives a new window its place and size a moment
+// after it appears. The stream's window used to appear once the stream was
+// there, at the size it was asked for, be given another, and the stream had
+// to start again for it: a second gone at every connect. So before there is a
+// stream, a plain window is put where the stream's would open, and the stream
+// is asked for at the size that one ends up with. It stays, black, until the
+// stream's own window is there (chromeStart), which then has its place.
+static NSWindow* s_Placeholder;
+double dynresScreenPanelScale(NSScreen* screen); // dynres_mac.mm
+
+bool chromeSettleWindow(int* width, int* height)
+{
+    const char* device = getenv("MOONLIGHT_DEVICE");
+    int w = 0, h = 0, left = 0, top = 0;
+    bool placed = getenv("MOONLIGHT_WINDOW_AT") != nullptr && sscanf(getenv("MOONLIGHT_WINDOW_AT"), "%d,%d", &left, &top) == 2;
+    if (device == nullptr || getenv("MOONLIGHT_WINDOW") == nullptr || sscanf(getenv("MOONLIGHT_WINDOW"), "%dx%d", &w, &h) != 2 || w < 320 || h < 200) {
+        return false;
+    }
+    @autoreleasepool {
+        bool titled = [NSUserDefaults.standardUserDefaults boolForKey:@"TitleBar"];
+        NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+        CGFloat bar = [NSWindow frameRectForContentRect:NSMakeRect(0, 0, 100, 100) styleMask:style].size.height - 100;
+        // The window as the stream's will be: with a title bar its frame is that much taller than the picture.
+        NSSize size = NSMakeSize(w, h + (titled ? bar : 0));
+        NSRect visible = NSScreen.mainScreen.visibleFrame;
+        NSRect frame = placed ? NSMakeRect(left, top - size.height, size.width, size.height)
+                              : NSMakeRect(NSMidX(visible) - size.width / 2, NSMidY(visible) - size.height / 2, size.width, size.height);
+        NSWindow* window = [[NSWindow alloc] initWithContentRect:[NSWindow contentRectForFrameRect:frame styleMask:style] styleMask:style
+                                                         backing:NSBackingStoreBuffered defer:NO];
+        window.releasedWhenClosed = NO;
+        window.title = [@(device) stringByRemovingPercentEncoding] ?: @(device);
+        window.backgroundColor = NSColor.blackColor;
+        window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        [window setFrame:frame display:NO];
+        [window orderFront:nil];
+        // Until it has been where it is for a tenth of a second, and no longer than half a second in all.
+        NSRect last = window.frame;
+        NSDate* began = [NSDate date], *since = began;
+        while (-began.timeIntervalSinceNow < 0.5 && -since.timeIntervalSinceNow < 0.1) {
+            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+            if (!NSEqualRects(window.frame, last)) {
+                last = window.frame;
+                since = [NSDate date];
+            }
+        }
+        s_Placeholder = window;
+        if (NSEqualRects(last, frame)) {
+            return false; // left where it was put: nothing to change
+        }
+        NSSize picture = NSMakeSize(round(last.size.width), round(last.size.height - (titled ? bar : 0)));
+        if (picture.width < 320 || picture.height < 200) {
+            return false;
+        }
+        setenv("MOONLIGHT_WINDOW", [NSString stringWithFormat:@"%dx%d", (int)picture.width, (int)picture.height].UTF8String, 1);
+        setenv("MOONLIGHT_WINDOW_AT", [NSString stringWithFormat:@"%d,%d", (int)lround(NSMinX(last)), (int)lround(NSMaxY(last))].UTF8String, 1);
+        // Pixels for points, as the device window worked them out for the size it knew (manager_mac.mm).
+        NSScreen* screen = window.screen ?: NSScreen.mainScreen;
+        CGFloat scale = screen.backingScaleFactor ?: 2;
+        if (getenv("MOONLIGHT_PANEL_PIXELS") != nullptr) {
+            scale *= dynresScreenPanelScale(screen);
+        }
+        *width = (int)(picture.width * scale + 0.5) & ~1;
+        *height = (int)(picture.height * scale + 0.5) & ~1;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "The window manager has the window at %.0fx%.0f, not %dx%d: the stream is asked for at %dx%d",
+                    picture.width, picture.height, w, h, *width, *height);
+        return true;
+    }
+}
+
 void chromeSessionEnding()
 {
     s_SessionOver = true;
@@ -1428,6 +1497,12 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     s_Tip = tip;
 
     chromeRaise();
+    // The window that kept this one's place has done so.
+    if (s_Placeholder != nil) {
+        [s_Placeholder close];
+        [s_Placeholder release];
+        s_Placeholder = nil;
+    }
     if ([NSUserDefaults.standardUserDefaults boolForKey:@"TitleBar"] && !(w.styleMask & NSWindowStyleMaskFullScreen)) {
         // (A window that has its title bar already, from a session before, keeps its size.)
         windowStyle(true, !(w.styleMask & NSWindowStyleMaskFullSizeContentView));

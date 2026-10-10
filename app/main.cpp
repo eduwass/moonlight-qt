@@ -57,6 +57,7 @@
 #include "backend/computermanager.h"
 #include "backend/systemproperties.h"
 #include "streaming/session.h"
+#include "streaming/chrome.h"
 #include "settings/streamingpreferences.h"
 #include "gui/sdlgamepadkeynavigation.h"
 
@@ -486,6 +487,13 @@ public:
             });
             connect(session, &Session::displayLaunchError, this, [this](QString text) { m_Error = text; });
             connect(session, &Session::sessionFinished, this, [this](int) { finish(); });
+            // Where the window manager will have the window, before the stream
+            // is asked for: it is asked for at that size, not at one to be corrected.
+            int tiledWidth, tiledHeight;
+            if (!qEnvironmentVariableIsSet("MOONLIGHT_FOLLOW") && chromeSettleWindow(&tiledWidth, &tiledHeight)) {
+                StreamingPreferences::get()->width = tiledWidth;
+                StreamingPreferences::get()->height = tiledHeight;
+            }
             if (!session->initialize(nullptr)) {
                 finish();
                 return;

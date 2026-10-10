@@ -51,6 +51,11 @@ void chromeRaise();          // something was put on top of the window's content
 void chromeLeftFullscreen(); // the window is back from fullscreen and has its style again
 void chromeConnection(bool up); // the stream's connection is there to be asked things, or is being taken down
 void chromeSessionEnding();     // the stream is on its way out for good: the device window is told
+// Before a stream connects: where the window manager would have its window,
+// found out with a window put there for it to place. True if that is not where
+// and how large the stream was going to be opened, and then the stream's size
+// in pixels for it. See chrome_mac.mm.
+bool chromeSettleWindow(int* width, int* height);
 // The instant pointer is asked for, but the host's helper has not got through
 // (yet, or at all): the host's cursor is still in the picture, and this
 // machine's pointer over it would make two. cursorshare_mac.mm. Any thread.
@@ -67,6 +72,7 @@ static inline void chromeRaise() {}
 static inline void chromeLeftFullscreen() {}
 static inline void chromeConnection(bool) {}
 static inline void chromeSessionEnding() {}
+static inline bool chromeSettleWindow(int*, int*) { return false; }
 #endif
 
 // netpath.cpp: the kind of link the stream is on, CHROME_THUNDERBOLT ..., and
