@@ -326,6 +326,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     truePixels.enabled = !fixed;
     rawColor.state = [device[@"rawColor"] boolValue];
     localCursor.state = [device[@"localCursor"] boolValue];
+    // What it is on that kind of machine, so that a pointer that never changes shape is no surprise.
+    localCursor.title = [device[@"system"] isEqualToString:@"linux"] ? @"Instant pointer (plain arrow)" : @"Instant pointer";
     bitrate.stringValue = [device[@"bitrate"] integerValue] > 0 ? [device[@"bitrate"] stringValue] : @"";
     screenshot.stringValue = device[@"screenshot"] ?: @"";
     before.stringValue = device[@"before"] ?: @"";
