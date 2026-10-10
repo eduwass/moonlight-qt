@@ -438,7 +438,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     // The devices may have been changed from elsewhere meanwhile: a stream's
     // own settings window is another process (its doctor can set a bitrate).
     NSArray* saved = [NSUserDefaults.standardUserDefaults arrayForKey:k_Devices];
-    if (saved != nil && ![saved isEqualToArray:s_Devices] && window.firstResponder == window) {
+    // Not while a field is being typed in: what is in it has not been saved yet.
+    if (saved != nil && ![saved isEqualToArray:s_Devices] && ![window.firstResponder isKindOfClass:[NSText class]]) {
         NSInteger selected = table.selectedRow;
         [s_Devices removeAllObjects];
         for (NSDictionary* each in saved) {

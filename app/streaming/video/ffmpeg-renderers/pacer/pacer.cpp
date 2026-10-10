@@ -2,6 +2,12 @@
 #include "streaming/streamutils.h"
 #include "streaming/chrome.h"
 
+#include <atomic>
+
+// Fork: whether the render thread asked the renderer to get ready (waitToRender)
+// for the frame it is about to draw; see renderFrame().
+static std::atomic<bool> s_WaitedToRender;
+
 #ifdef Q_OS_WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -149,6 +155,7 @@ int Pacer::renderThread(void* context)
         // Wait for the renderer to be ready for the next frame
         if (!chromeUnseen()) { // fork: see renderFrame()
             me->m_VsyncRenderer->waitToRender();
+            s_WaitedToRender = true;
         }
 
         // Acquire the frame queue lock to protect the queue and
@@ -343,16 +350,24 @@ void Pacer::renderFrame(AVFrame* frame)
     // stream costs this machine. A frame the renderer has already taken from
     // its swapchain must still be handed back (plvk.cpp holds a lock from
     // waitToRender() until then), which is what cleanupRenderContext() does.
+    // Frames not drawn are not counted as drawn.
     if (chromeUnseen()) {
         m_VsyncRenderer->cleanupRenderContext();
+        s_WaitedToRender = false;
     }
     else {
+        if (!s_WaitedToRender && m_RenderThread != nullptr) {
+            // Back in sight since this turn of the render thread began: the
+            // renderer was not asked to get ready, and would drop this frame.
+            m_VsyncRenderer->waitToRender();
+        }
+        s_WaitedToRender = false;
         m_VsyncRenderer->renderFrame(frame);
-    }
-    uint64_t afterRender = LiGetMicroseconds();
+        uint64_t afterRender = LiGetMicroseconds();
 
-    m_VideoStats->totalRenderTimeUs += (afterRender - beforeRender);
-    m_VideoStats->renderedFrames++;
+        m_VideoStats->totalRenderTimeUs += (afterRender - beforeRender);
+        m_VideoStats->renderedFrames++;
+    }
 
     // Wait until after next frame to free this one to ensure the GPU
     // doesn't stall or read garbage if the backing buffer gets returned

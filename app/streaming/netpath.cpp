@@ -6,6 +6,7 @@
 // slower. This names the path in the log when a session starts and in the
 // statistics overlay (Ctrl+Alt+Shift+S).
 
+#include <thread>
 #include <QHostInfo>
 #include <QHostAddress>
 #include <QJsonArray>
@@ -92,7 +93,8 @@ const char* netPath()
     return s_Path;
 }
 
-void netPathUpdate(const QString& host)
+// What netPathUpdate finds out, for one address.
+static void lookInto(const QString& host)
 {
     QByteArray via = "unknown interface";
     s_Link = CHROME_OTHER;
@@ -136,4 +138,19 @@ void netPathUpdate(const QString& host)
     }
     SDL_snprintf(s_Path, sizeof(s_Path), "%s via %s", host.toUtf8().constData(), via.constData());
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Network path: %s", s_Path);
+}
+
+void netPathUpdate(const QString& host)
+{
+    if (!QHostAddress(host).isNull()) {
+        lookInto(host);
+        return;
+    }
+    // A name has to be resolved, and that can take as long as the resolver
+    // likes: not on the thread that runs the stream. Until the answer is in,
+    // the path is unknown, as it always was for a name.
+    s_Link = CHROME_OTHER;
+    s_Relayed = false;
+    SDL_snprintf(s_Path, sizeof(s_Path), "%s via unknown interface", host.toUtf8().constData());
+    std::thread([host]() { lookInto(host); }).detach();
 }
