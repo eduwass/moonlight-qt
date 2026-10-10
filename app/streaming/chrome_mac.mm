@@ -811,6 +811,9 @@ static void soundIfOwed()
 void chromeConnection(bool up)
 {
     s_Connection = up;
+    if (up) {
+        soundIfOwed(); // asked for while this was down, and left owed
+    }
     if (!up && s_Warm != nil) {
         [NSObject cancelPreviousPerformRequestsWithTarget:s_Warm selector:@selector(fresh) object:nil];
     }

@@ -488,6 +488,7 @@ bool Session::dynresTick()
 
     if (s_Again) {
         s_Again = false;
+        s_Retry = false; // this is that one too
         width = m_StreamConfig.width;
         height = m_StreamConfig.height;
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "The screen is unlocked: connecting again, with sound");

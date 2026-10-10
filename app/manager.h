@@ -7,6 +7,9 @@ void managerBeforeLaunch();
 // This Mac's screen is locked.
 bool managerScreenLocked();
 
+// In a stream's process: its device (MOONLIGHT_DEVICE) is still in the list.
+bool managerDeviceThere();
+
 // Opens the list of devices. Returns at once; the window lives in the app's loop.
 void managerStart();
 

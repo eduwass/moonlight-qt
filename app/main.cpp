@@ -534,6 +534,11 @@ private:
                 qputenv("MOONLIGHT_RETRIED", self);
                 m_Again = true;
                 QTimer::singleShot(3000, this, [this] {
+                    // Removed from the list meanwhile: nobody's stream.
+                    if (!managerDeviceThere()) {
+                        QCoreApplication::quit();
+                        return;
+                    }
                     QList<QByteArray> arguments;
                     for (const QString& argument : QCoreApplication::arguments()) {
                         arguments.append(argument.toLocal8Bit());

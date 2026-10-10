@@ -595,7 +595,10 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         }
     }
     // The window's place goes with the device under its new name, and its size is the one typed here.
-    {
+    // (Only then: the stream writes it too, and writing it back for an edit
+    // that has nothing to do with it could undo a move made meanwhile.)
+    bool renamed = ![oldName isEqualToString:device[@"name"]];
+    if (renamed || (sized && !fixed)) {
         NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
         NSMutableDictionary* placement = [[[defaults dictionaryForKey:placementKey(oldName)] mutableCopy] autorelease];
         if (placement != nil) {
@@ -1556,6 +1559,18 @@ static void passLink(NSString* link, bool thenQuit)
 // if a later macOS has no such method this does nothing and the half second is
 // back, nothing else. The public defaults that take Dictation and Emoji out of
 // the menu do not stop the library being loaded (tried).
+bool managerDeviceThere()
+{
+    const char* given = getenv("MOONLIGHT_DEVICE");
+    NSString* name = given != nullptr ? ([@(given) stringByRemovingPercentEncoding] ?: @(given)) : nil;
+    for (NSDictionary* each in [NSUserDefaults.standardUserDefaults arrayForKey:k_Devices]) {
+        if ([each isKindOfClass:[NSDictionary class]] && [each[@"name"] isEqual:name]) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool managerScreenLocked()
 {
     CFDictionaryRef session = CGSessionCopyCurrentDictionary();
