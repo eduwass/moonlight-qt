@@ -19,6 +19,7 @@
 // this app for a moment); folders are not taken. Upgrade path: stream the tar
 // straight between the two processes.
 
+#include <CommonCrypto/CommonDigest.h>
 #include "SDL_compat.h"
 
 #import <Cocoa/Cocoa.h>
@@ -536,7 +537,11 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
     NSString* device = [[given componentsSeparatedByCharactersInSet:plain.invertedSet] componentsJoinedByString:@"_"];
     if (device.length == 0 || device.length > 100) {
         // (Still its own: two devices with long names are two folders.)
-        device = [NSString stringWithFormat:@"stream%lx", (unsigned long)given.hash];
+        // (All of the name goes into it: NSString's own hash looks at 96 characters.)
+        unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+        const char* whole = given.UTF8String ?: "";
+        CC_SHA256(whole, (CC_LONG)strlen(whole), digest);
+        device = [NSString stringWithFormat:@"stream%02x%02x%02x%02x%02x%02x%02x%02x", digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7]];
     }
     static long arrivals; // only ever here, on the one queue
     // (The folder they are unpacked into is this arrival's own: what is done

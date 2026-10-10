@@ -11,6 +11,7 @@
 // One line of text, then the picture:  <width> <height> <hot x> <hot y> <bytes>\n<PNG>
 // Sizes are in points; the PNG may hold more pixels than that (a 2x cursor).
 
+#include <os/lock.h>
 #include <fcntl.h>
 #include "SDL_compat.h"
 #include "chrome.h"
@@ -141,6 +142,14 @@ static void apply(NSData* png, int width, int height, int hotX, int hotY)
     s_Cursor = cursor;
 }
 
+struct PendingCursor {
+    NSMutableData* png;
+    int width, height, hotX, hotY;
+};
+static os_unfair_lock s_PendingLock = OS_UNFAIR_LOCK_INIT;
+static PendingCursor s_Pending;
+static bool s_PendingScheduled;
+
 // `counted`, if given, is set once the first cursor has come, and the helper
 // counted as connected then: over ssh there is nothing before that to say it
 // is really there.
@@ -168,10 +177,28 @@ static void serve(FILE* in, bool* counted = nullptr)
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Cursor shapes: coming over ssh");
         }
         // The main thread is inside SDL's event loop, which runs the main queue.
-        dispatch_async(dispatch_get_main_queue(), ^{
-            apply(png, width, height, hotX, hotY);
-            [png release];
-        });
+        // One cursor waits for it at most, the newest: a host that sends them
+        // faster than they are put up (or while the main thread is busy with
+        // a restart) must not have them all kept, 4 MB each.
+        os_unfair_lock_lock(&s_PendingLock);
+        [s_Pending.png release];
+        s_Pending = {png, width, height, hotX, hotY};
+        bool schedule = !s_PendingScheduled;
+        s_PendingScheduled = true;
+        os_unfair_lock_unlock(&s_PendingLock);
+        if (schedule) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                os_unfair_lock_lock(&s_PendingLock);
+                PendingCursor pending = s_Pending;
+                s_Pending.png = nil;
+                s_PendingScheduled = false;
+                os_unfair_lock_unlock(&s_PendingLock);
+                if (pending.png != nil) {
+                    apply(pending.png, pending.width, pending.height, pending.hotX, pending.hotY);
+                    [pending.png release];
+                }
+            });
+        }
     }
 }
 
