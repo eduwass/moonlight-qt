@@ -332,6 +332,13 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
     if (count == s_Seen || count == s_Sending) {
         return;
     }
+    // What macOS itself brought here from another Mac (Universal Clipboard
+    // marks it so) is not sent on to a Mac: it most likely came from that one,
+    // and macOS does the same errand between the two anyway.
+    if (!s_Linux && [board.types containsObject:@"com.apple.is-remote-clipboard"]) {
+        s_Seen = count;
+        return;
+    }
     // Files first: the Finder puts their names on the pasteboard as text too,
     // and a name is not what was copied.
     NSArray<NSURL*>* copied = [board readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
