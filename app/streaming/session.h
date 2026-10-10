@@ -307,6 +307,8 @@ private:
     static QSemaphore s_ActiveSessionSemaphore;
 
 public:
+    // Fork: the stream's sound is not played (a window out of sight: chrome_mac.mm).
+    void setAudioMuted(bool muted) { m_AudioMuted = muted; }
     // Fork: the host ended the stream, and said so (no error). Any thread.
     static std::atomic<bool> s_HostEnded;
     // Fork: counts the connections this session has had (dynres.cpp makes new

@@ -66,6 +66,14 @@ CONNECTION_LISTENER_CALLBACKS Session::k_ConnCallbacks = {
 
 Session* Session::s_ActiveSession;
 std::atomic<bool> Session::s_HostEnded;
+
+// Fork: see chrome.h. (The flag is Moonlight's own, for its "mute when not in front".)
+void sessionMute(bool mute)
+{
+    if (Session::get() != nullptr) {
+        Session::get()->setAudioMuted(mute);
+    }
+}
 std::atomic<int> Session::s_Generation;
 QSemaphore Session::s_ActiveSessionSemaphore(1);
 
@@ -1896,6 +1904,7 @@ void Session::exec()
     }
 
     m_InputHandler->setWindow(m_Window);
+    chromeWindowMade(m_Window); // fork: see chrome_mac.mm
 
     QSvgRenderer svgIconRenderer(QString(":/res/moonlight.svg"));
     QImage svgImage(ICON_SIZE, ICON_SIZE, QImage::Format_RGBA8888);

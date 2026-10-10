@@ -51,6 +51,7 @@ void chromeRaise();          // something was put on top of the window's content
 void chromeLeftFullscreen(); // the window is back from fullscreen and has its style again
 void chromeConnection(bool up); // the stream's connection is there to be asked things, or is being taken down
 void chromeSessionEnding();     // the stream is on its way out for good: the device window is told
+void chromeWindowMade(SDL_Window* window); // the session's window is there, this moment: a stream that starts out of sight has it out of sight at once
 // The instant pointer is asked for, but the host's helper has not got through
 // (yet, or at all): the host's cursor is still in the picture, and this
 // machine's pointer over it would make two. cursorshare_mac.mm. Any thread.
@@ -67,7 +68,12 @@ static inline void chromeRaise() {}
 static inline void chromeLeftFullscreen() {}
 static inline void chromeConnection(bool) {}
 static inline void chromeSessionEnding() {}
+static inline void chromeWindowMade(SDL_Window*) {}
 #endif
+
+// session.cpp: the stream's sound is played here, or not (a stream out of
+// sight is not to be heard either). Main thread.
+void sessionMute(bool mute);
 
 // netpath.cpp: the kind of link the stream is on, CHROME_THUNDERBOLT ..., and
 // whether Tailscale is relaying it.

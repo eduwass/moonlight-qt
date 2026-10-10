@@ -21,6 +21,8 @@ For the **instant pointer**, the host runs `cursor-share` (in `mac-host/`), whic
 
 On the Mac, in this order: `mac-host/install.sh` builds the helpers and sets up the services, `mac-host/build-sunshine.sh` builds Sunshine with the local patch, and `mac-host/sunshine-install-signed.sh`, in a terminal on that Mac, signs it and walks you through the approvals macOS asks for. `mac-host/doctor.sh` checks all of this from another machine.
 
+When a stream ends, the host is made quiet: while it was streamed Sunshine had its sound, and what was playing would otherwise carry on out loud from its own speakers. A Mac host's output is muted (the next stream, or a volume key, unmutes it). The PC's outputs are muted too, and its players paused where they can be asked to (MPRIS: a browser's video, most music players), unless a stream starts again within four seconds, as it does when its window is resized.
+
 ## A Linux PC (Hyprland)
 
 - **A display when there is no monitor.** Booted headless, Hyprland has no output and Sunshine finds no encoder. `pc/sunshine-virtual-display` makes a virtual output when Sunshine starts.

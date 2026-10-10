@@ -868,6 +868,22 @@ void chromeConnection(bool up)
     }
 }
 
+// MOONLIGHT_HIDDEN, the first window of the process: seen by nobody between
+// its being made and chromeStart putting it away (a tenth of a second, and a
+// window that came and went). Clear, and off the screen; show: gives it back.
+void chromeWindowMade(SDL_Window* window)
+{
+    static bool once;
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (once || getenv("MOONLIGHT_HIDDEN") == nullptr || !SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_COCOA) {
+        return;
+    }
+    once = true;
+    info.info.cocoa.window.alphaValue = 0;
+    [info.info.cocoa.window orderOut:nil];
+}
+
 void chromeSessionEnding()
 {
     s_SessionOver = true;
@@ -925,6 +941,7 @@ bool chromeUnseen()
     }
     if (hidden) {
         hidden = false;
+        sessionMute(false);
         SDL_DisableScreenSaver(); // as Moonlight has it while its stream shows
     }
     else if (!asked) {
@@ -933,7 +950,8 @@ bool chromeUnseen()
     if (window.miniaturized) {
         [window deminiaturize:nil];
     }
-    // (One that started out of sight was no app in the Dock until now.)
+    window.alphaValue = 1; // one that started out of sight was made clear
+    // (And was no app in the Dock until now.)
     if (NSApp.activationPolicy != NSApplicationActivationPolicyRegular) {
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     }
@@ -953,6 +971,7 @@ bool chromeUnseen()
     }
     hidden = true;
     s_Unseen = true;
+    sessionMute(true); // out of sight, out of hearing
     s_Focus = -1; // the keyboard is not left in a bar that is out of sight: typing would go nowhere when the window is back
     for (NSView* view in s_Bar.subviews) {
         view.needsDisplay = YES; // its ring too: in a title bar the bar is not hidden, and would keep it drawn
