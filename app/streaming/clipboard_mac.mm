@@ -23,6 +23,10 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <fcntl.h>
+#include <sys/time.h>
+#include <unistd.h>
+
 #define CLIPBOARD_MAX_BYTES (1024 * 1024)
 #define CLIPBOARD_MAX_PICTURE (20 * 1024 * 1024)
 #define CLIPBOARD_MAX_FILES (200 * 1024 * 1024)
@@ -75,19 +79,30 @@ static NSData* remote(NSString* command, NSData* input, NSUInteger most, NSUInte
     @catch (NSException*) {
         // The other end went away mid-write; the exit status says so too.
     }
-    // No more than is wanted of it: the other clipboard may hold anything.
+    // No more than is wanted of it: the other clipboard may hold anything, and
+    // the other machine may send anything. More than `most` ends it, and is
+    // nothing received.
     NSMutableData* got = [NSMutableData data];
+    bool over = false;
     for (;;) {
-        NSData* more = [out.fileHandleForReading availableData];
-        if (more.length == 0) {
-            break;
-        }
-        if (got.length <= most) {
+        @autoreleasepool {
+            NSData* more = [out.fileHandleForReading availableData];
+            if (more.length == 0) {
+                break;
+            }
+            if (most == 0) {
+                continue; // nothing is expected back; what comes is let go of
+            }
+            if (more.length > most - got.length) {
+                over = true;
+                [task terminate];
+                break;
+            }
             [got appendData:more];
         }
     }
     [task waitUntilExit];
-    return task.terminationStatus == 0 ? got : nil;
+    return !over && task.terminationStatus == 0 ? got : nil;
 }
 
 // A Wayland session's clipboard from an ssh login, which has neither variable.
@@ -112,59 +127,177 @@ static NSString* filesKey(NSArray<NSURL*>* files)
 static NSArray<NSURL*>* sendable(NSArray<NSURL*>* files)
 {
     unsigned long long total = 0;
+    NSMutableSet* names = [NSMutableSet set];
     for (NSURL* file in files) {
         NSDictionary* about = [NSFileManager.defaultManager attributesOfItemAtPath:file.path error:nil];
-        if (![about.fileType isEqualToString:NSFileTypeRegular]) {
+        // Two of one name (from two folders) would be one file at the other end.
+        NSString* name = file.lastPathComponent.lowercaseString;
+        if (![about.fileType isEqualToString:NSFileTypeRegular] || name == nil || [names containsObject:name]) {
             return nil;
         }
+        [names addObject:name];
         total += about.fileSize;
     }
     return files.count > 0 && files.count <= CLIPBOARD_MAX_FILE_COUNT && total <= CLIPBOARD_MAX_FILES ? files : nil;
 }
 
-// Runs tar here. Packing: gives back the archive of `files`. Unpacking: puts
-// `archive` into `folder`. nil if it failed.
-static NSData* tar(NSArray<NSURL*>* files, NSData* archive, NSString* folder)
+// Packs `files` with tar; nil if it failed or came to more than is sent (a
+// file can have grown since it was looked at).
+static NSData* pack(NSArray<NSURL*>* files)
 {
     NSTask* task = [[[NSTask alloc] init] autorelease];
     task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/tar"];
-    NSMutableArray* arguments = [NSMutableArray array];
-    if (archive != nil) {
-        // tar takes no name that climbs out of the folder (no -P here).
-        [arguments addObjectsFromArray:@[@"-xf", @"-", @"-C", folder]];
-    }
-    else {
-        [arguments addObjectsFromArray:@[@"-cf", @"-"]];
-        for (NSURL* file in files) {
-            // (A name that begins with a dash would be taken for an option; "--"
-            // would end the options for good, and the next file's -C with them.)
-            NSString* name = file.lastPathComponent;
-            [arguments addObjectsFromArray:@[@"-C", file.path.stringByDeletingLastPathComponent, [name hasPrefix:@"-"] ? [@"./" stringByAppendingString:name] : name]];
-        }
+    // -n: what was a file and is a folder by now is not gone into.
+    NSMutableArray* arguments = [NSMutableArray arrayWithArray:@[@"-cnf", @"-"]];
+    for (NSURL* file in files) {
+        // "./": a name is a name, whatever it begins with (tar reads -x as an
+        // option and @x as an archive to take entries from).
+        [arguments addObjectsFromArray:@[@"-C", file.path.stringByDeletingLastPathComponent, [@"./" stringByAppendingString:file.lastPathComponent]]];
     }
     task.arguments = arguments;
-    NSPipe* in = [NSPipe pipe];
     NSPipe* out = [NSPipe pipe];
-    task.standardInput = in;
+    task.standardInput = [NSFileHandle fileHandleWithNullDevice];
     task.standardOutput = out;
     task.standardError = [NSFileHandle fileHandleWithNullDevice];
     if (![task launchAndReturnError:nil]) {
         return nil;
     }
-    // Fed from another thread: tar may print before it has read everything.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        @try {
-            if (archive != nil) {
-                [in.fileHandleForWriting writeData:archive];
+    NSMutableData* got = [NSMutableData data];
+    bool over = false;
+    for (;;) {
+        @autoreleasepool {
+            NSData* more = [out.fileHandleForReading availableData];
+            if (more.length == 0) {
+                break;
             }
-            [in.fileHandleForWriting closeFile];
+            if (got.length + more.length > CLIPBOARD_MAX_FILES + (1 << 20)) {
+                over = true;
+                [task terminate];
+                break;
+            }
+            [got appendData:more];
         }
-        @catch (NSException*) {
-        }
-    });
-    NSData* got = [out.fileHandleForReading readDataToEndOfFile];
+    }
     [task waitUntilExit];
-    return task.terminationStatus == 0 ? got : nil;
+    return !over && task.terminationStatus == 0 ? got : nil;
+}
+
+static NSString* const k_Nul = [NSString stringWithCharacters:(const unichar[]){0} length:1];
+
+static unsigned long long octal(const unsigned char* field, size_t length, bool* bad)
+{
+    unsigned long long value = 0;
+    size_t i = 0;
+    if (length > 0 && (field[0] & 0x80)) {
+        *bad = true; // the binary form, for sizes of 8 GB and more
+        return 0;
+    }
+    while (i < length && field[i] == ' ') {
+        i++;
+    }
+    for (; i < length && field[i] >= '0' && field[i] <= '7'; i++) {
+        value = value * 8 + (field[i] - '0');
+    }
+    return value;
+}
+
+// Unpacks an archive that came from the other machine into `folder`, and
+// gives back the names of the files made; nil (and nothing kept) if it is not
+// exactly what is taken: plain files, at the top, each name once, no more of
+// them and no larger than is sent. Read here and not by tar, which would
+// unpack whatever it is given: links, a path of folders, an archive that is
+// small and compressed and enormous once out.
+static NSArray<NSString*>* unpack(NSData* archive, NSString* folder)
+{
+    const unsigned char* bytes = (const unsigned char*)archive.bytes;
+    size_t length = archive.length, at = 0;
+    NSMutableArray<NSString*>* made = [NSMutableArray array];
+    NSString* longName = nil; // from a header that names the next file in full
+    unsigned long long total = 0;
+    bool bad = false;
+    while (!bad && at + 512 <= length) {
+        const unsigned char* header = bytes + at;
+        bool empty = true;
+        for (int i = 0; i < 512 && empty; i++) {
+            empty = header[i] == 0;
+        }
+        if (empty) {
+            break; // the end of the archive
+        }
+        unsigned long long size = octal(header + 124, 12, &bad), stamp = octal(header + 136, 12, &bad);
+        size_t data = at + 512;
+        if (bad || size > length - data) {
+            bad = true;
+            break;
+        }
+        char kind = (char)header[156];
+        if (kind == 'x' || kind == 'L') {
+            // The next file's name in full: "<length> path=<name>\n" among
+            // other such lines, or the name itself.
+            NSString* text = [[[NSString alloc] initWithBytes:bytes + data length:(NSUInteger)size encoding:NSUTF8StringEncoding] autorelease];
+            if (kind == 'L') {
+                longName = [text componentsSeparatedByString:k_Nul].firstObject; // it ends with one
+            }
+            else {
+                for (NSString* line in [text componentsSeparatedByString:@"\n"]) {
+                    NSRange path = [line rangeOfString:@" path="];
+                    if (path.location != NSNotFound) {
+                        longName = [line substringFromIndex:NSMaxRange(path)];
+                    }
+                    // A size given here is one this does not go by: the header's has been checked against what is there.
+                    bad |= [line rangeOfString:@" size="].location != NSNotFound;
+                }
+            }
+            bad |= text == nil;
+        }
+        else if (kind == 'g') {
+            // settings for the whole archive: nothing here needs them
+        }
+        else if (kind == '0' || kind == 0) {
+            NSString* name = longName;
+            if (name == nil) {
+                NSString* last = [[[NSString alloc] initWithBytes:header length:strnlen((const char*)header, 100) encoding:NSUTF8StringEncoding] autorelease];
+                NSString* first = [[[NSString alloc] initWithBytes:header + 345 length:strnlen((const char*)header + 345, 155) encoding:NSUTF8StringEncoding] autorelease];
+                name = first.length > 0 ? [NSString stringWithFormat:@"%@/%@", first, last] : last;
+            }
+            longName = nil;
+            if ([name hasPrefix:@"./"]) {
+                name = [name substringFromIndex:2];
+            }
+            total += size;
+            if (name.length == 0 || name.length > 255 || [name isEqualToString:@"."] || [name isEqualToString:@".."] ||
+                    [name rangeOfString:@"/"].location != NSNotFound || [name rangeOfString:k_Nul].location != NSNotFound ||
+                    made.count >= CLIPBOARD_MAX_FILE_COUNT || total > CLIPBOARD_MAX_FILES) {
+                bad = true;
+                break;
+            }
+            NSString* path = [folder stringByAppendingPathComponent:name];
+            // New, and not through a link: a name that is there already is the second of its kind.
+            int fd = open(path.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+            if (fd < 0) {
+                bad = true;
+                break;
+            }
+            size_t written = 0;
+            while (written < size) {
+                ssize_t n = write(fd, bytes + data + written, (size_t)size - written);
+                if (n <= 0) {
+                    bad = true;
+                    break;
+                }
+                written += (size_t)n;
+            }
+            struct timeval times[2] = {{(time_t)stamp, 0}, {(time_t)stamp, 0}};
+            futimes(fd, times); // as at the other end: it is part of what the files are known by
+            close(fd);
+            [made addObject:name];
+        }
+        else {
+            bad = true; // a folder, a link, a device: not taken
+        }
+        at = data + (size_t)((size + 511) / 512 * 512);
+    }
+    return bad || made.count == 0 ? nil : made;
 }
 
 // (The Mac one writes, waits a moment and counts, until the clipboard has
@@ -179,7 +312,7 @@ static NSString* const k_LinuxSetFiles = @(R"SH(d="$HOME/.cache/moonlightnext-cl
 static NSString* const k_MacListFiles = @(R"SH(l=$(osascript -l JavaScript -e 'ObjC.import("AppKit"); var u = $.NSPasteboard.generalPasteboard.readObjectsForClassesOptions($.NSArray.arrayWithObject($.NSURL), $({NSPasteboardURLReadingFileURLsOnly: true})); var o = []; for (var i = 0; u && i < u.count; i++) o.push(u.objectAtIndex(i).path.js); o.join("\n")' 2>/dev/null); )SH");
 static NSString* const k_LinuxListFiles = @(R"SH(l=$(wl-paste -l 2>/dev/null | grep -qx text/uri-list && wl-paste -t text/uri-list 2>/dev/null | python3 -c 'import sys,urllib.parse; [print(urllib.parse.unquote(u.strip()[7:])) for u in sys.stdin if u.startswith("file://")]'); )SH");
 // After either of the two above: the files of $l as an archive, or else what follows this.
-static NSString* const k_SendFilesOr = @(R"SH(set --; n=0; bad=0; while IFS= read -r f; do [ -n "$f" ] || continue; [ -f "$f" ] || { bad=1; continue; }; n=$((n + $(wc -c < "$f"))); set -- "$@" -C "$(dirname "$f")" "$(basename "$f")"; done <<LIST
+static NSString* const k_SendFilesOr = @(R"SH(set --; n=0; bad=0; while IFS= read -r f; do [ -n "$f" ] || continue; [ -f "$f" ] || { bad=1; continue; }; n=$((n + $(wc -c < "$f"))); set -- "$@" -C "$(dirname "$f")" "./$(basename "$f")"; done <<LIST
 $l
 LIST
 if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then echo files; tar -cf - "$@"; exit; fi; [ -z "$l" ] || exit 0; )SH");
@@ -214,7 +347,7 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
         s_Sending = count;
         dispatch_async(s_Queue, ^{
             @autoreleasepool {
-                NSData* archive = tar(files, nil, nil);
+                NSData* archive = pack(files);
                 bool sent = archive != nil && remote(command, archive, 0, CLIPBOARD_SECONDS(archive.length)) != nil;
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: %lu files, %lu bytes %s", (unsigned long)files.count,
                             (unsigned long)archive.length, sent ? "sent" : "could not be sent; they are tried again the next time");
@@ -376,21 +509,22 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
     NSURL* caches = [[manager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject
                      URLByAppendingPathComponent:NSBundle.mainBundle.bundleIdentifier ?: @"dev.eduwass.moonlight-next"];
     // One folder per device: two streams must not empty each other's.
-    NSString* device = getenv("MOONLIGHT_DEVICE") != nullptr ? @(getenv("MOONLIGHT_DEVICE")) : @"stream";
+    // (Its name with nothing in it that could lead out of the caches: this
+    // folder is emptied, and the name comes from the environment.)
+    NSString* given = getenv("MOONLIGHT_DEVICE") != nullptr ? @(getenv("MOONLIGHT_DEVICE")) : nil;
+    NSCharacterSet* plain = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789%_"];
+    NSString* device = [[given componentsSeparatedByCharactersInSet:plain.invertedSet] componentsJoinedByString:@"_"];
+    if (device.length == 0 || device.length > 100) {
+        device = @"stream";
+    }
     NSURL* fresh = [caches URLByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-%@.new", device]];
     NSURL* folder = [caches URLByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-%@", device]];
     [manager removeItemAtURL:fresh error:nil];
-    if (![manager createDirectoryAtURL:fresh withIntermediateDirectories:YES attributes:nil error:nil] || tar(nil, archive, fresh.path) == nil) {
+    NSArray<NSString*>* names = [manager createDirectoryAtURL:fresh withIntermediateDirectories:YES attributes:nil error:nil] ? unpack(archive, fresh.path) : nil;
+    if (names == nil) {
         [manager removeItemAtURL:fresh error:nil];
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: files came that are not taken (a folder or a link among them, too many, too much)");
         return;
-    }
-    // Only plain files, at the top: whatever else an archive may hold is not offered for pasting.
-    NSMutableArray<NSString*>* names = [NSMutableArray array];
-    for (NSString* name in [manager contentsOfDirectoryAtPath:fresh.path error:nil]) {
-        NSDictionary* about = [manager attributesOfItemAtPath:[fresh.path stringByAppendingPathComponent:name] error:nil];
-        if ([about.fileType isEqualToString:NSFileTypeRegular]) {
-            [names addObject:name];
-        }
     }
     NSMutableArray<NSURL*>* arrived = [NSMutableArray array];
     for (NSString* name in names) {
