@@ -264,8 +264,7 @@ static int listenForCursors(void*)
 static int fetchOverSsh(void* destination)
 {
     NSString* host = (NSString*)destination; // kept for good
-    for (;;) {
-        sleep(1);
+    for (;; sleep(1)) { // at once the first time, then a second after each try
         @autoreleasepool {
             NSTask* task = [[[NSTask alloc] init] autorelease];
             task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/ssh"];
@@ -285,6 +284,11 @@ static int fetchOverSsh(void* destination)
             if (![task launchAndReturnError:nil]) {
                 continue;
             }
+            static bool asked;
+            if (!asked) {
+                asked = true;
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Cursor shapes: asking the host for them over ssh");
+            }
             int copy = dup(out.fileHandleForReading.fileDescriptor);
             FILE* in = copy >= 0 ? fdopen(copy, "r") : nullptr;
             bool counted = false;
@@ -300,6 +304,15 @@ static int fetchOverSsh(void* destination)
             }
             [hold.fileHandleForWriting closeFile]; // the helper sees its input closed and goes
             [task terminate];
+            [task waitUntilExit];
+            // Said once per change, not once per try: a host that is off is tried every second.
+            static int said = -2;
+            int how = counted ? -1 : task.terminationStatus;
+            if (how != said) {
+                said = how;
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, counted ? "Cursor shapes: the helper over ssh has gone; asking again" :
+                            "Cursor shapes: nothing came over ssh (it ended with %d); trying every second", task.terminationStatus);
+            }
             [task waitUntilExit];
         }
     }
