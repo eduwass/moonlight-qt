@@ -317,7 +317,7 @@ static NSString* const k_PaneSymbols[PANE_COUNT] = {@"gearshape", @"dial.medium"
         [k_Names[row] drawAtPoint:NSMakePoint(275, y + 14) withAttributes:text(13, NSFontWeightRegular, 0xECECECFF)];
     }
 
-    [@"Click a shortcut, then press the new keys. Each action has its own full shortcut. A bound shortcut is taken by Moonlight; the remote Mac never sees it."
+    [@"Click a shortcut, then press the new keys. Each action has its own full shortcut. A bound shortcut is taken by Moonlight; the other machine never sees it."
         drawWithRect:NSMakeRect(240, 334, 330, 60) options:NSStringDrawingUsesLineFragmentOrigin attributes:text(11, NSFontWeightRegular, 0xA3A1A8FF)];
 }
 @end
