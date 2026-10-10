@@ -390,7 +390,7 @@ static Diagnosis examine(NSDictionary* device)
             NSString* said = [runTool(@"/bin/sh", @[@"-c", device[@"before"]], 8) stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
             NSString* last = [said componentsSeparatedByString:@"\n"].lastObject;
             NSCharacterSet* notAddress = [[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:"] invertedSet];
-            if (last.length > 2 && last.length < 64 && [last rangeOfCharacterFromSet:notAddress].location == NSNotFound) {
+            if (last.length > 2 && last.length < 64 && ![last hasPrefix:@"-"] && [last rangeOfCharacterFromSet:notAddress].location == NSNotFound) {
                 asStreamed[@"address"] = last;
             }
         }

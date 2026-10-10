@@ -1047,7 +1047,7 @@ bool chromeUnseen()
     if ([note.userInfo[@"do"] isEqual:@"end"]) {
         [self finish];
     }
-    else {
+    else if ([note.userInfo[@"do"] isEqual:@"show"]) {
         // "Shown": the device window takes silence for a stream on its way
         // out, and starts a new one if this one is gone within a few seconds.
         // (No answer in the middle of a restart in place either; the stream

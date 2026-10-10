@@ -582,7 +582,12 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     if (name.stringValue.length > 0 && !taken) {
         device[@"name"] = name.stringValue;
     }
-    device[@"address"] = [address.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    // (An address goes on Moonlight's command line: one that begins with a dash would be read as an option there.)
+    NSString* typed = [address.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    while ([typed hasPrefix:@"-"]) {
+        typed = [typed substringFromIndex:1];
+    }
+    device[@"address"] = typed;
     device[@"system"] = system.indexOfSelectedItem == 1 ? @"linux" : @"mac";
     device[@"fixed"] = @(fixed);
     if (sized && fixed == wasFixed && width.integerValue >= 320 && height.integerValue >= 200 && width.integerValue <= 8192 && height.integerValue <= 8192) {
@@ -1077,7 +1082,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         NSString* text = [[[NSString alloc] initWithData:output ?: [NSData data] encoding:NSUTF8StringEncoding] autorelease];
         NSString* last = [[text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] componentsSeparatedByString:@"\n"].lastObject;
         NSCharacterSet* notAddress = [[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:"] invertedSet];
-        bool isAddress = last.length > 2 && last.length < 64 && [last rangeOfCharacterFromSet:notAddress].location == NSNotFound;
+        // (Not one that begins with a dash: it goes on a command line, where that is an option.)
+        bool isAddress = last.length > 2 && last.length < 64 && ![last hasPrefix:@"-"] && [last rangeOfCharacterFromSet:notAddress].location == NSNotFound;
         go(isAddress ? last : device[@"address"]);
     });
 }
@@ -1139,8 +1145,13 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         }
     }
     if (device == nil) {
+        // A link comes from anywhere, and as often as its sender likes: one
+        // such message at a time, and of a name only so much.
+        if (window.attachedSheet != nil) {
+            return NO;
+        }
         NSAlert* alert = [[[NSAlert alloc] init] autorelease];
-        alert.messageText = [NSString stringWithFormat:@"No device called “%@”", wanted];
+        alert.messageText = [NSString stringWithFormat:@"No device called “%@”", wanted.length > 80 ? [[wanted substringToIndex:80] stringByAppendingString:@"…"] : wanted];
         alert.informativeText = @"A link names a device as it is called in the list, or by its address.";
         [window makeKeyAndOrderFront:nil];
         [alert beginSheetModalForWindow:window completionHandler:nil];
