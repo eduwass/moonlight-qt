@@ -72,6 +72,7 @@ void sessionMute(bool mute)
 {
     if (Session::get() != nullptr) {
         Session::get()->setAudioMuted(mute);
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, mute ? "The window is out of sight: its sound is not played" : "The window is back: its sound is played again");
     }
 }
 std::atomic<int> Session::s_Generation;
