@@ -444,7 +444,12 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
 {
     NSInteger count = NSPasteboard.generalPasteboard.changeCount;
     if (count != s_Seen) {
-        return; // something copied here has not got there yet: it is the newer
+        // Something copied here has not got there yet (it is the newer), or
+        // this Mac's clipboard has changed by itself since this app last
+        // looked: Universal Clipboard bringing what was copied on another Mac.
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: not fetched, this Mac's has changed since it was last looked at%s",
+                    [NSPasteboard.generalPasteboard.types containsObject:@"com.apple.is-remote-clipboard"] ? " (macOS brought it from another device)" : "");
+        return;
     }
     NSInteger turn = s_Turn;
     // What it holds, said on a first line: "files", "text" or "png". Files if
