@@ -504,6 +504,8 @@ static Diagnosis examine(NSDictionary* device)
         @[caption(@"Closing a stream's window"), warm],
         @[caption(@""), note(@"A warm stream goes on out of sight, so its window is back at once: Connect in the device window, a link, or the Dock. "
                               "The device keeps sending picture all that time. End Stream in the device window, or ⌃⌥⇧Q in the stream, ends it for good.")],
+        // Which build this is: the fork's commit, as the build script wrote it into the bundle.
+        @[caption(@"Build"), note([NSBundle.mainBundle objectForInfoDictionaryKey:@"MoonlightNextBuild"] ?: @"not recorded")],
     ]];
     grid.rowSpacing = 10;
     grid.columnSpacing = 12;
