@@ -697,11 +697,34 @@ static int fetchFrom(const char* destination, bool linux)
     return 0;
 }
 
+// selftest send <ssh destination> <mac|linux> <file>...: those files onto that
+// machine's clipboard, as the app sends them.
+static int sendTo(const char* destination, bool linux, int count, char** paths)
+{
+    s_Linux = linux;
+    s_Destination = [@(destination) copy];
+    NSMutableArray<NSURL*>* files = [NSMutableArray array];
+    for (int i = 0; i < count; i++) {
+        [files addObject:[NSURL fileURLWithPath:@(paths[i])]];
+    }
+    NSData* archive = pack(files);
+    if (archive == nil) {
+        printf("not packed\n");
+        return 1;
+    }
+    NSData* done = remote(linux ? [k_Wayland stringByAppendingString:k_LinuxSetFiles] : k_MacSetFiles, archive, 0, CLIPBOARD_SECONDS(archive.length));
+    printf("%s (%lu bytes)\n", done != nil ? "sent" : "not taken there", (unsigned long)archive.length);
+    return done != nil ? 0 : 1;
+}
+
 int main(int argc, char** argv)
 {
     @autoreleasepool {
         if (argc == 4 && strcmp(argv[1], "fetch") == 0) {
             return fetchFrom(argv[2], strcmp(argv[3], "linux") == 0);
+        }
+        if (argc > 4 && strcmp(argv[1], "send") == 0) {
+            return sendTo(argv[2], strcmp(argv[3], "linux") == 0, argc - 4, argv + 4);
         }
         NSFileManager* manager = NSFileManager.defaultManager;
         NSString* root = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-selftest-%d", getpid()]];

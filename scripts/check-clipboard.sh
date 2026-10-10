@@ -6,6 +6,8 @@
 #   scripts/check-clipboard.sh fetch <ssh destination | -> <mac|linux>
 #       what the app would fetch when that machine's clipboard holds files
 #       (- is this machine), with the commands it really sends
+#   scripts/check-clipboard.sh send <ssh destination> <mac|linux> <file>...
+#       those files onto that machine's clipboard, as the app sends them
 cd "$(dirname "$0")/.." || exit 1
 out=$(mktemp -d)
 clang++ -x objective-c++ -std=c++17 -fno-objc-arc -w -DCLIPBOARD_SELFTEST -I app $(sdl2-config --cflags) \
