@@ -34,8 +34,17 @@ static void load()
     memcpy(s_Bindings, k_Defaults, sizeof(s_Bindings));
     NSArray* saved = [NSUserDefaults.standardUserDefaults arrayForKey:k_Saved];
     // (Fewer than there are now, from before one was added: those are kept, and the new one has its own.)
-    for (NSUInteger i = 0; saved.count % 2 == 0 && i < KEY_COUNT && i * 2 + 1 < saved.count; i++) {
+    NSUInteger had = saved.count % 2 == 0 ? MIN(saved.count / 2, (NSUInteger)KEY_COUNT) : 0;
+    for (NSUInteger i = 0; i < had; i++) {
         s_Bindings[i] = {[saved[i * 2] intValue], [saved[i * 2 + 1] intValue]};
+    }
+    // (And if one of the kept ones is what a new one would have had, the new one has none until it is given one.)
+    for (NSUInteger i = had; had > 0 && i < KEY_COUNT; i++) {
+        for (NSUInteger other = 0; other < had; other++) {
+            if (s_Bindings[other].key == s_Bindings[i].key && s_Bindings[other].mods == s_Bindings[i].mods) {
+                s_Bindings[i] = {0, 0};
+            }
+        }
     }
 }
 

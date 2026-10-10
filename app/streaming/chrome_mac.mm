@@ -1221,8 +1221,10 @@ static void toggleStyle()
     }
     bool titled = !s_Titled;
     [NSUserDefaults.standardUserDefaults setBool:titled forKey:@"TitleBar"];
+    s_Focus = -1; // the keyboard is not left on a switch that has gone (the gear, in a title bar)
     windowStyle(titled, false);
     placeBar(titled);
+    s_WindowedFrame = w.frame; // at once: fullscreen may be next, and comes back to this
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, titled ? "The window has a title bar of its own" : "The bar is over the picture");
 }
 
