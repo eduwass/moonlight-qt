@@ -894,7 +894,13 @@ bool chromeUnseen()
 // does: the host leaves its cursor out of the picture.)
 - (void)fresh
 {
-    if ([self live] && !hidden) {
+    // Not more than one in half a second: several of the things that call
+    // this come together (a Space slides in: the window is in sight, the Space
+    // has changed), and a whole picture is a large frame for the host to make.
+    static NSTimeInterval last;
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if ([self live] && !hidden && now - last >= 0.5) {
+        last = now;
         LiRequestIdrFrame();
     }
 }

@@ -45,7 +45,7 @@ Changes are saved as you make them and hold from the next Connect.
 | **Address** | Where it is: an IP address or a name. |
 | **System** | macOS or Linux. Decides the mark on the stream's bar. |
 | **Stream size** | **Follows the window**: the stream has the window's pixels and restarts when you resize it; the two numbers are the window to open, in points. **Fixed, scaled to fit**: the stream keeps the size you give, in pixels, and is scaled into the window with black bands where the shapes differ. Nothing is stretched. |
-| **True Pixels** | The stream has as many pixels as the monitor's panel, not as many as macOS draws. See [the stream window](/stream-window#true-pixels). |
+| **True Pixels** | The stream has as many pixels as the monitor's panel, not as many as macOS draws. On for a new device: on a monitor run at a scaled resolution, a fullscreen stream without it asks the host for more pixels than the panel can show (6400 × 2700 for a 5120 × 2160 panel), and a small host cannot keep up. See [the stream window](/stream-window#true-pixels). |
 | **Raw colours** | Show the machine's colour values as they are. Without it macOS fits them to your display, which on a wide-gamut monitor makes a desktop look washed out next to its usual self. |
 | **Instant pointer** | Your Mac draws the pointer itself, so it moves with your hand instead of one round trip later. The host must leave its own cursor out of the picture: a Mac does with the cursor helper, and you see its cursor shapes; a Hyprland PC does with `pc-wake`, and you see a plain arrow whatever is under it. See [Hosts](/hosts). |
 | **Bitrate** | In kbps. Empty lets the app choose by the stream's size. |

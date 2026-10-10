@@ -92,7 +92,7 @@ static void loadDevices()
             continue;
         }
         [s_Devices addObject:[[@{@"name": host, @"host": host, @"address": address, @"system": @"mac",
-                                 @"windowWidth": @1920, @"windowHeight": @1080, @"localCursor": @NO} mutableCopy] autorelease]];
+                                 @"windowWidth": @1920, @"windowHeight": @1080, @"localCursor": @NO, @"truePixels": @YES} mutableCopy] autorelease]];
     }
     saveDevices();
 }
@@ -547,7 +547,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 - (void)add:(id)sender
 {
-    [s_Devices addObject:[[@{@"name": @"New device", @"address": @"", @"system": @"mac", @"windowWidth": @1920, @"windowHeight": @1080} mutableCopy] autorelease]];
+    [s_Devices addObject:[[@{@"name": @"New device", @"address": @"", @"system": @"mac", @"windowWidth": @1920, @"windowHeight": @1080, @"truePixels": @YES} mutableCopy] autorelease]];
     saveDevices();
     [table reloadData];
     [table selectRowIndexes:[NSIndexSet indexSetWithIndex:s_Devices.count - 1] byExtendingSelection:NO];
