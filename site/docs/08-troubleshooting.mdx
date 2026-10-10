@@ -33,7 +33,7 @@ The stream's size does not match the window's pixels. Check that **Follow size**
 
 ## "The stream could not be started"
 
-A stream that the other machine takes and then drops in its first half minute is tried once more by itself, three seconds later, before anything is said: that covers a host that was just restarting, or still ending the stream before. If you see the message, the second try failed too. Look at whether Sunshine is running on the other machine, then at the ports the message names.
+A stream that the other machine takes and then drops in its first half minute is tried once more by itself, three seconds later, before anything is said: that covers a host that was just restarting, or still ending the stream before. If you see the message after that, the second try failed too. (A machine that could not be reached at all is not tried again: that message comes at once.) Look at whether Sunshine is running on the other machine, then at the ports the message names.
 
 ## A warm stream is gone
 
@@ -57,10 +57,10 @@ The device window sets these for you. Starting a stream by hand (`MoonlightNext.
 | `MOONLIGHT_PANEL_PIXELS` | Start with True Pixels on. |
 | `MOONLIGHT_RAW_COLOR` | Raw colours. |
 | `MOONLIGHT_NO_SOUND` | No sound: the stream opens no sound output. |
-| `MOONLIGHT_QML=1` | Start a stream through Moonlight's own screens, as it was before: half a second slower, and with their error dialogs. |
+| `MOONLIGHT_QML=1` | Start a device's stream through Moonlight's own screens, as it was before: half a second slower, and with their error dialogs. (A stream started by hand, with no `MOONLIGHT_DEVICE`, goes that way anyway.) |
 | `MOONLIGHT_OPEN_URL` | Not for you: how a link that reached a stream's process is handed to a newly started device window. |
 | `MOONLIGHT_CLIPBOARD=me@host` | Share the clipboard with that ssh destination. |
 | `MOONLIGHT_LOCAL_CURSOR` | Instant pointer. |
 | `MOONLIGHT_POINTER` | Not read by the app: set to 1 or 0 for a device's **Before connecting** command, to say whether Instant pointer is on. |
-| `MOONLIGHT_FPS_ABOVE=pixels:above:below` | The frame rate by stream size. |
+| `MOONLIGHT_FPS_ABOVE=pixels:above:below` | The frame rate by stream size, at every restart: `above` for a stream of more than `pixels`, `below` otherwise. The first start has what `--fps` says. |
 | `MOONLIGHT_CLASSIC` | Moonlight's own screens instead of the device window. |

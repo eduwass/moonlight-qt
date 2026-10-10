@@ -23,13 +23,15 @@ Add these after a `?`, joined by `&`. They hold for that one stream; the device'
 
 | Parameter | Example | Means |
 | --- | --- | --- |
-| `size` | `size=1600x900` | The window to open, in points. |
-| `fixed` | `fixed=3840x2160` | A fixed stream size in pixels, scaled to fit the window. `fixed=0` turns a device's fixed size off. |
+| `size` | `size=1600x900` | The window to open, in points. Width 320 to 8192, height 200 to 8192. |
+| `fixed` | `fixed=3840x2160` | A fixed stream size in pixels, scaled to fit the window. `fixed=0` turns a device's fixed size off, and so does a size that cannot be read. Same limits as `size`. |
 | `truepixels` | `truepixels=1` | True Pixels on (`1`) or off (`0`). |
 | `raw` | `raw=1` | Raw colours on or off. |
 | `pointer` | `pointer=1` | Instant pointer on or off. |
-| `bitrate` | `bitrate=20000` | In kbps. `0` for automatic. |
-| `fps` | `fps=30` | Frames a second. |
+| `bitrate` | `bitrate=20000` | In kbps, 500 to 500000. `0` for the bitrate of Settings › Quality. |
+| `fps` | `fps=30` | Frames a second, 10 to 240. |
+
+Numbers are whole. A `size`, `bitrate` or `fps` outside its limits is left out, and the device's own is used.
 
 ## Examples
 

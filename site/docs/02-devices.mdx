@@ -11,7 +11,7 @@ Open MoonlightNext by itself and you get the device window. The machines are on 
 
 The dot before a name is green when the machine answers. Under the name is its system and, while it has a stream, "streaming".
 
-**+** adds a device, **−** removes the one selected. Removing a device keeps its pairing, so adding it again needs no new PIN.
+**+** adds a device, **−** removes the one selected, after asking: its stream, open or warm, ends with it, and where its window was is forgotten. Its pairing stays, so adding it again needs no new PIN.
 
 The **…** menu has **Settings…**, **Pair This Device…** and **Classic Moonlight…**, which opens Moonlight's own screens.
 
@@ -41,17 +41,17 @@ Changes are saved as you make them and hold from the next Connect.
 
 | Setting | What it does |
 | --- | --- |
-| **Name** | What it is called here, and in [links](/links). No two devices have the same name: one that is taken is not accepted, and the name stays as it was. |
+| **Name** | What it is called here, and in [links](/links). No two devices have the same name, whatever the capitals: one that is taken is not accepted, and the name stays as it was. Nor is a new name while the device has a stream, open or warm: end it first. |
 | **Address** | Where it is: an IP address or a name. |
 | **System** | macOS or Linux. Decides the mark on the stream's bar. |
-| **Stream size** | **Follows the window**: the stream has the window's pixels and restarts when you resize it; the two numbers are the window to open, in points. **Fixed, scaled to fit**: the stream keeps the size you give, in pixels, and is scaled into the window with black bands where the shapes differ. Nothing is stretched. |
+| **Stream size** | **Follows the window**: the stream has the window's pixels and restarts when you resize it; the two numbers are the window to open, in points. **Fixed, scaled to fit**: the stream keeps the size you give, in pixels, and is scaled into the window with black bands where the shapes differ. Nothing is stretched. Either way a width from 320 to 8192 and a height from 200 to 8192; other numbers are not kept. |
 | **True Pixels** | The stream has as many pixels as the monitor's panel, not as many as macOS draws. On for a new device: on a monitor run at a scaled resolution, a fullscreen stream without it asks the host for more pixels than the panel can show (6400 × 2700 for a 5120 × 2160 panel), and a small host cannot keep up. See [the stream window](/stream-window#true-pixels). |
 | **Raw colours** | Show the machine's colour values as they are. Without it macOS fits them to your display, which on a wide-gamut monitor makes a desktop look washed out next to its usual self. |
 | **Instant pointer** | Your Mac draws the pointer itself, so it moves with your hand instead of one round trip later. The host must leave its own cursor out of the picture: a Mac does with the cursor helper, and you see its cursor shapes; a Hyprland PC does with `pc-wake`, and you see a plain arrow whatever is under it. See [Hosts](/hosts). |
 | **No sound** | The device's sound is not played here, and your Mac's sound output is not opened for the stream. For a machine that sends none (Sunshine with `stream_audio = disabled`), or whose sound reaches you another way. A stream started while your Mac's screen is locked starts without sound whatever this says, because the output cannot be opened then; when you unlock, it connects again by itself, with sound. |
-| **Bitrate** | In kbps. Empty lets the app choose by the stream's size. |
+| **Bitrate** | In kbps. Empty takes the bitrate of Settings › Quality; with that on automatic too, the app chooses by the stream's size. |
 | **Screenshot** | The command for the picture, above. |
-| **Before connecting** | A shell command run on your Mac before every Connect, to wake or unlock the machine. If the last line it prints is an address, the stream goes there instead of to **Address**. It is run with `MOONLIGHT_POINTER` set to 1 or 0: whether **Instant pointer** is on. |
+| **Before connecting** | A shell command run on your Mac (by `/bin/sh -c`, with nothing to type into) before a stream is started, to wake or unlock the machine. It has eight seconds; the stream is started after that whether or not it is done or went well. Bringing a stream that is already there forward does not run it. If the last line it prints is an address, the stream goes there instead of to **Address**. It is run with `MOONLIGHT_POINTER` set to 1 or 0: whether **Instant pointer** is on. |
 | **Clipboard** | An ssh destination for the machine (`me@my-pc`, or a name from your ssh config). With it, the two machines share a clipboard: see below. With a Mac it is also how the instant pointer's cursor shapes arrive: over ssh, and not by that Mac's helper connecting to yours, which macOS there may refuse. |
 
 ## Connect
@@ -71,4 +71,4 @@ The stream itself carries no clipboard, so MoonlightNext passes it over ssh, to 
 - What you copied on your Mac goes to the other machine when you switch to its stream.
 - What you copied there comes back when you switch away from the stream.
 
-So copy on one side, switch, paste on the other. It takes about a tenth of a second. Text up to 1 MB, pictures up to 20 MB (a screenshot copied on one side pastes on the other), and files copied in the Finder or a file manager, up to 200 MB together: they are unpacked into a cache folder at the other end and put on its clipboard as files. Folders are not taken. A password manager's copies marked as concealed are not sent. A Mac is read and written with `pbpaste` and `pbcopy` (and `osascript` for pictures and files), a Linux machine with `wl-paste` and `wl-copy` (the `wl-clipboard` package, on Wayland; `python3` for files). Between two Macs signed in to the same Apple account, macOS's own Universal Clipboard does much of this by itself.
+So copy on one side, switch, paste on the other. It takes about a tenth of a second. Text up to 1 MB, pictures up to 20 MB (a screenshot copied on one side pastes on the other), and files copied in the Finder or a file manager, up to 64 of them and 200 MB together: they are unpacked into a cache folder at the other end and put on its clipboard as files. With a folder or a link among them, two of the same name, or more than that, none of them goes. A password manager's copies marked as concealed on your Mac are not sent; what is copied on the other machine is fetched whatever it is marked as there. A Mac is read and written with `pbpaste` and `pbcopy` (and `osascript` for pictures and files), a Linux machine with `wl-paste` and `wl-copy` (the `wl-clipboard` package, on Wayland; `python3` for files). Between two Macs signed in to the same Apple account, macOS's own Universal Clipboard does much of this by itself.
