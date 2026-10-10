@@ -814,6 +814,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     table.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
     table.dataSource = self;
     table.delegate = self;
+    table.target = self;
+    table.doubleAction = @selector(connect:); // as in any list of things to open
     scroll.documentView = table;
     [sideView addSubview:scroll];
 
@@ -1002,6 +1004,28 @@ void managerStart()
     s_Manager = [[ManagerController alloc] init];
     [s_Manager build];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    // Settings… with ⌘, in the app's menu, where a Mac app has it. (Qt makes
+    // that menu when its loop starts, so this waits a turn.)
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSMenu* appMenu = NSApp.mainMenu.itemArray.firstObject.submenu;
+        // Qt keeps a hidden Preferences item there that already owns ⌘, : make
+        // that one ours rather than add a second the key never reaches.
+        NSMenuItem* item = nil;
+        for (NSMenuItem* each in appMenu.itemArray) {
+            if ([each.keyEquivalent isEqualToString:@","]) {
+                item = each;
+            }
+        }
+        if (item == nil && appMenu != nil) {
+            item = [[[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@","] autorelease];
+            [appMenu insertItem:item atIndex:MIN(1, appMenu.numberOfItems)];
+        }
+        item.title = @"Settings…";
+        item.target = s_Manager;
+        item.action = @selector(settings:);
+        item.hidden = NO;
+        item.enabled = YES;
+    });
     // Started by a link to a device, the app shows that device's stream and
     // not this window (the Dock icon brings it up). macOS says which kind of
     // start this is when the app has finished launching.
