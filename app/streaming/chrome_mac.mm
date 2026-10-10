@@ -820,6 +820,9 @@ bool chromeUnseen()
 - (void)closeAsked:(id)sender
 {
     NSInteger seconds = [NSUserDefaults.standardUserDefaults integerForKey:@"WarmSeconds"];
+    if (-startedAt.timeIntervalSinceNow > 4) {
+        [self remember]; // a move just made, not yet written down
+    }
     if (seconds == 0 || (window.styleMask & NSWindowStyleMaskFullScreen)) {
         [self finish];
         return;
@@ -844,20 +847,26 @@ bool chromeUnseen()
 // not fullscreen, not while it is being put out of sight.
 - (void)placed:(NSNotification*)note
 {
-    if (note.object == window && -startedAt.timeIntervalSinceNow > 4) {
+    if (note.object == window) {
+        // A second after the last of them, and not before the window has
+        // settled where the app puts it as it starts.
+        NSTimeInterval wait = MAX(1.0, 4.0 + startedAt.timeIntervalSinceNow);
         [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(remember) object:nil];
-        [self performSelector:@selector(remember) withObject:nil afterDelay:1 inModes:@[NSRunLoopCommonModes]];
+        [self performSelector:@selector(remember) withObject:nil afterDelay:wait inModes:@[NSRunLoopCommonModes]];
     }
 }
 - (void)remember
 {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(remember) object:nil];
     const char* device = getenv("MOONLIGHT_DEVICE");
     if (device == nullptr || hidden || ![self live] || (window.styleMask & NSWindowStyleMaskFullScreen) || window.miniaturized) {
         return;
     }
     NSRect frame = window.frame;
+    // MOONLIGHT_WINDOW_ONCE: its size was asked for by a link, for this stream only.
+    bool once = getenv("MOONLIGHT_WINDOW_ONCE") != nullptr;
     managerSetDeviceWindow([@(device) stringByRemovingPercentEncoding] ?: @(device), lround(frame.origin.x), lround(NSMaxY(frame)),
-                           lround(frame.size.width), lround(frame.size.height));
+                           once ? 0 : lround(frame.size.width), once ? 0 : lround(frame.size.height));
 }
 - (void)coverChanged:(NSNotification*)note
 {

@@ -452,7 +452,10 @@ bool Session::dynresTick()
         s_Sized = true;
         int pointWidth, pointHeight;
         SDL_GetWindowSize(m_Window, &pointWidth, &pointHeight);
-        if (windowed && pointWidth > 0 && (width != m_StreamConfig.width || height != m_StreamConfig.height)) {
+        // Not a stream of a fixed size in a window whose size was given: that
+        // window is as large as it was left, and the picture is scaled into it.
+        bool given = !s_Follow && !qEnvironmentVariableIsEmpty("MOONLIGHT_WINDOW");
+        if (!given && windowed && pointWidth > 0 && (width != m_StreamConfig.width || height != m_StreamConfig.height)) {
             double scale = (double)width / pointWidth;
             SDL_SetWindowSize(m_Window, (int)(m_StreamConfig.width / scale + 0.5),
                               (int)(m_StreamConfig.height / scale + 0.5));

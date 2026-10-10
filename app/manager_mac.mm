@@ -652,6 +652,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
             // where its window was left the last time: its left edge and its top
             environment[@"MOONLIGHT_WINDOW_AT"] = [NSString stringWithFormat:@"%ld,%ld", (long)[device[@"windowLeft"] integerValue], (long)[device[@"windowTop"] integerValue]];
         }
+        if ([device[@"sizeOnce"] boolValue]) environment[@"MOONLIGHT_WINDOW_ONCE"] = @"1";
         if (fixed) environment[@"MOONLIGHT_FOLLOW"] = @"0";
         if (!fixed && [device[@"truePixels"] boolValue]) environment[@"MOONLIGHT_PANEL_PIXELS"] = @"1";
         if ([device[@"rawColor"] boolValue]) environment[@"MOONLIGHT_RAW_COLOR"] = @"1";
@@ -752,6 +753,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         if ([item.name isEqualToString:@"size"] && isSize) {
             device[@"windowWidth"] = @(w);
             device[@"windowHeight"] = @(h);
+            device[@"sizeOnce"] = @YES; // for this stream only: not to be remembered as the device's
         }
         else if ([item.name isEqualToString:@"fixed"]) {
             device[@"fixed"] = @(isSize || on);
@@ -1032,8 +1034,10 @@ void managerSetDeviceWindow(NSString* name, long left, long top, long width, lon
         if ([device[@"name"] isEqualToString:name]) {
             device[@"windowLeft"] = @(left);
             device[@"windowTop"] = @(top);
-            device[@"windowWidth"] = @(width);
-            device[@"windowHeight"] = @(height);
+            if (width > 0 && height > 0) {
+                device[@"windowWidth"] = @(width);
+                device[@"windowHeight"] = @(height);
+            }
         }
     }
     saveDevices();
