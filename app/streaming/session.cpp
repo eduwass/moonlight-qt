@@ -2317,6 +2317,7 @@ void Session::exec()
 
 DispatchDeferredCleanup:
     chromeConnection(false); // fork: on its way out; it no longer answers "show" (chrome_mac.mm)
+    chromeSessionEnding();
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
 

@@ -49,6 +49,7 @@ bool chromeKey(int key, bool down, int mods);
 void chromeRaise();          // something was put on top of the window's content; go back above it
 void chromeLeftFullscreen(); // the window is back from fullscreen and has its style again
 void chromeConnection(bool up); // the stream's connection is there to be asked things, or is being taken down
+void chromeSessionEnding();     // the stream is on its way out for good: the device window is told
 // The instant pointer is asked for, but the host's helper has not got through
 // (yet, or at all): the host's cursor is still in the picture, and this
 // machine's pointer over it would make two. cursorshare_mac.mm. Any thread.
@@ -64,6 +65,7 @@ static inline bool chromeKey(int, bool, int) { return false; }
 static inline void chromeRaise() {}
 static inline void chromeLeftFullscreen() {}
 static inline void chromeConnection(bool) {}
+static inline void chromeSessionEnding() {}
 #endif
 
 // netpath.cpp: the kind of link the stream is on, CHROME_THUNDERBOLT ..., and

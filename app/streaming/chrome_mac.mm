@@ -773,6 +773,15 @@ void chromeConnection(bool up)
     }
 }
 
+void chromeSessionEnding()
+{
+    const char* device = getenv("MOONLIGHT_DEVICE");
+    if (device != nullptr) {
+        [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.gone" object:@(device)
+                                                                    userInfo:nil deliverImmediately:YES];
+    }
+}
+
 bool chromeUnseen()
 {
     return s_Unseen || s_Covered;

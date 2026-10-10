@@ -431,6 +431,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     }
     if (![now isEqualToSet:running]) {
         [running setSet:now];
+        dockMenuChanged();
         NSInteger selected = table.selectedRow;
         [table reloadData];
         [table selectRowIndexes:[NSIndexSet indexSetWithIndex:selected] byExtendingSelection:NO];
@@ -719,7 +720,9 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         if (deviceName.length == 0 || [device[@"address"] length] == 0) {
             continue;
         }
-        NSMenuItem* item = [[[NSMenuItem alloc] initWithTitle:deviceName action:@selector(dockConnect:) keyEquivalent:@""] autorelease];
+        // Said in words that it has a stream: the Dock draws no tick for an app's own items (tried).
+        NSString* title = [running containsObject:deviceName] ? [deviceName stringByAppendingString:@" (streaming)"] : deviceName;
+        NSMenuItem* item = [[[NSMenuItem alloc] initWithTitle:title action:@selector(dockConnect:) keyEquivalent:@""] autorelease];
         item.target = self;
         item.representedObject = deviceName;
         [menu addItem:item];
@@ -747,6 +750,39 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 {
     if ([note.object isKindOfClass:[NSString class]]) {
         [self waited:note.object];
+        [self stream:note.object runs:true];
+    }
+}
+
+- (void)streamGone:(NSNotification*)note
+{
+    if ([note.object isKindOfClass:[NSString class]]) {
+        [self stream:note.object runs:false];
+    }
+}
+
+// A stream has said it has a picture, or that it is on its way out: the list,
+// the buttons and the Dock menu say so at once, and not only the next time the
+// window is looked at.
+- (void)stream:(NSString*)key runs:(bool)runs
+{
+    for (NSDictionary* device in s_Devices) {
+        NSString* deviceName = device[@"name"];
+        if (deviceName != nil && [deviceId(deviceName) isEqual:key] && [running containsObject:deviceName] != runs) {
+            if (runs) {
+                [running addObject:deviceName];
+            }
+            else {
+                [running removeObject:deviceName];
+            }
+            NSInteger selected = table.selectedRow;
+            [table reloadData];
+            if (selected >= 0) {
+                [table selectRowIndexes:[NSIndexSet indexSetWithIndex:selected] byExtendingSelection:NO];
+            }
+            [self show];
+            dockMenuChanged();
+        }
     }
 }
 
@@ -763,6 +799,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         dispatch_async(dispatch_get_main_queue(), ^{
             if (app != nil && deviceName != nil) {
                 [running addObject:deviceName];
+                dockMenuChanged();
             }
             else if (deviceName != nil) {
                 [self waited:deviceId(deviceName)]; // it did not start
@@ -1077,6 +1114,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(streamShown:) name:@"dev.eduwass.moonlight-next.shown" object:nil
                                             suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
     [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(streamUp:) name:@"dev.eduwass.moonlight-next.up" object:nil
+                                            suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
+    [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(streamGone:) name:@"dev.eduwass.moonlight-next.gone" object:nil
                                             suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
 
     window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 940, 700)
