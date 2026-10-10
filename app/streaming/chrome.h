@@ -12,6 +12,7 @@ enum {
     CHROME_FOLLOW,
     CHROME_FULLSCREEN,
     CHROME_SHOWN,
+    CHROME_SOUND, // not a click either: the screen is unlocked, and a stream started without sound for its being locked can have it
 };
 
 enum { CHROME_THUNDERBOLT, CHROME_ETHERNET, CHROME_WIFI, CHROME_TAILSCALE, CHROME_OTHER };

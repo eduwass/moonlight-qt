@@ -114,6 +114,7 @@ static Uint32 s_CoverAt, s_PacketsAt;
 
 // Waiting for a new connection's first video packets.
 static bool s_Await, s_Retry;
+static bool s_Again;           // connect again at the same size: the sound output can be opened now
 static Uint32 s_AwaitAt;
 static int s_Retries;
 
@@ -284,7 +285,7 @@ bool Session::dynresTick()
         dynresBusy(m_Window, false);
         s_Cover = COVER_OFF;
         s_SeenWidth = s_SeenHeight = 0;
-        s_Changed = s_Sized = s_Retry = false;
+        s_Changed = s_Sized = s_Retry = s_Again = false;
         s_Await = true;
         s_AwaitAt = 0;
         s_Retries = 0;
@@ -329,6 +330,11 @@ bool Session::dynresTick()
         }
         if (asked & (1 << CHROME_FULLSCREEN)) {
             toggleFullscreen();
+        }
+        if (asked & (1 << CHROME_SOUND)) {
+            // Over what main.cpp put in the environment, which SDL has read by now.
+            SDL_SetHintWithPriority("SDL_AUDIODRIVER", "coreaudio", SDL_HINT_OVERRIDE);
+            s_Again = true;
         }
 
         // Twice a second is plenty for what the bar shows, and at once after a click.
@@ -480,7 +486,13 @@ bool Session::dynresTick()
         }
     }
 
-    if (s_Retry) {
+    if (s_Again) {
+        s_Again = false;
+        width = m_StreamConfig.width;
+        height = m_StreamConfig.height;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "The screen is unlocked: connecting again, with sound");
+    }
+    else if (s_Retry) {
         s_Retry = false;
         width = m_StreamConfig.width;
         height = m_StreamConfig.height;

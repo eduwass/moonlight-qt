@@ -985,6 +985,17 @@ bool chromeUnseen()
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "The screen is there again");
         s_Away = false;
         [self moved:nil]; // a whole new picture
+        // A stream started while the screen was locked has no sound (main.cpp).
+        // Now it can: connect again, a moment later, when the output is there.
+        const char* driver = getenv("SDL_AUDIODRIVER");
+        if (driver != nullptr && strcmp(driver, "dummy") == 0 && getenv("MOONLIGHT_NO_SOUND") == nullptr) {
+            unsetenv("SDL_AUDIODRIVER");
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                if (s_Action != nullptr && s_Connection && !s_Away) {
+                    s_Action(CHROME_SOUND);
+                }
+            });
+        }
     }
 }
 - (void)spaceChanged:(NSNotification*)note
