@@ -231,14 +231,14 @@ static Diagnosis examine(NSDictionary* device)
     bool bridge = [interface hasPrefix:@"bridge"];
     double carries = 0; // Mbps the link can be trusted with, 0 for plenty
     if (bridge) {
-        [d.lines addObject:@[@0, [NSString stringWithFormat:@"Reached at %@ over %@, a direct cable (Thunderbolt bridge).", address, interface]]];
+        [d.lines addObject:@[@0, [NSString stringWithFormat:@"The way to %@ is over %@, a direct cable (Thunderbolt bridge).", address, interface]]];
     }
     else if (onWifi) {
         double rate = wifi.transmitRate;
         NSInteger signal = wifi.rssiValue, noise = wifi.noiseMeasurement;
         NSString* band = wifi.wlanChannel.channelBand == kCWChannelBand5GHz ? @"5 GHz" : wifi.wlanChannel.channelBand == kCWChannelBand6GHz ? @"6 GHz" : @"2.4 GHz";
         [d.lines addObject:@[@(signal < -72 || rate < 100 ? 1 : 0),
-                             [NSString stringWithFormat:@"Reached at %@ over Wi-Fi (%@): %@, link rate %.0f Mbps, signal %ld dBm, noise %ld dBm.",
+                             [NSString stringWithFormat:@"The way to %@ is over Wi-Fi (%@): %@, link rate %.0f Mbps, signal %ld dBm, noise %ld dBm.",
                               address, interface, band, rate, (long)signal, (long)noise]]];
         // Half the link rate is what gets through on a good day; a stream should take well under that.
         carries = rate * 0.5;
@@ -256,7 +256,7 @@ static Diagnosis examine(NSDictionary* device)
                 relayed = [peer[@"CurAddr"] length] == 0;
             }
         }
-        [d.lines addObject:@[@(relayed ? 2 : 1), [NSString stringWithFormat:@"Reached at %@ through Tailscale (%@)%@.", address, interface,
+        [d.lines addObject:@[@(relayed ? 2 : 1), [NSString stringWithFormat:@"The way to %@ is through Tailscale (%@)%@.", address, interface,
                               !known ? @"" : relayed ? @", relayed through a Tailscale server" : @", directly"]]];
         if (relayed) {
             carries = 10;
@@ -266,7 +266,7 @@ static Diagnosis examine(NSDictionary* device)
         }
     }
     else {
-        [d.lines addObject:@[@0, [NSString stringWithFormat:@"Reached at %@ over %@ (wired).", address, interface]]];
+        [d.lines addObject:@[@0, [NSString stringWithFormat:@"The way to %@ is over %@ (wired).", address, interface]]];
     }
 
     // How fast and how steadily it answers.
@@ -567,3 +567,26 @@ void settingsDoctorExamine(NSView* pane, NSString* device)
         [(DoctorPane*)pane examine:device];
     }
 }
+
+// Check Link's examination by itself, from a terminal: what it finds for an
+// address and what bitrate it would advise (scripts/check-link.sh <address>).
+// Not in the app.
+#ifdef DOCTOR_SELFTEST
+NSArray* managerDevices() { return @[]; }
+void managerSetDeviceBitrate(NSString*, long) {}
+int main(int argc, char** argv)
+{
+    @autoreleasepool {
+        if (argc != 2) {
+            fprintf(stderr, "usage: check-link <address>\n");
+            return 2;
+        }
+        Diagnosis d = examine(@{@"name": @"selftest", @"address": @(argv[1])});
+        for (NSArray* line in d.lines) {
+            printf("%s  %s\n", [line[0] integerValue] == 0 ? "ok  " : [line[0] integerValue] == 1 ? "mind" : "bad ", [line[1] UTF8String]);
+        }
+        printf("advice: %s\nbitrate: %s\n", d.advice.UTF8String, d.kbps < 0 ? "none advised" : d.kbps == 0 ? "automatic" : [NSString stringWithFormat:@"%ld kbps", (long)d.kbps].UTF8String);
+        return 0;
+    }
+}
+#endif
