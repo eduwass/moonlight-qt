@@ -1331,7 +1331,8 @@ void Session::getWindowDimensions(int& x, int& y,
     // Create our window on the same display that Qt's UI
     // was being displayed on.
     else {
-        Q_ASSERT(m_QtWindow != nullptr);
+        // (Fork: there is none when the stream is run without Moonlight's own
+        // screens, see StreamRunner in main.cpp; the first display is taken then.)
         if (m_QtWindow != nullptr) {
             QScreen* screen = m_QtWindow->screen();
             if (screen != nullptr) {

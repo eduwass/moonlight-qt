@@ -189,7 +189,7 @@ static void tellStream(NSString* name, NSString* what)
     NSButton* endStream;
     int shooting; // screenshots on their way
     NSMutableDictionary<NSString*, NSWindow*>* waiting; // by device id: what is shown where a stream is about to be
-    NSMutableDictionary<NSString*, NSDate*>* shownAt;    // by device id: when its stream last said it had come forward
+    NSMutableDictionary<NSString*, NSNumber*>* asking;   // by device id: a "show" not yet answered by its stream
 }
 @end
 
@@ -707,7 +707,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 - (void)streamShown:(NSNotification*)note
 {
     if ([note.object isKindOfClass:[NSString class]]) {
-        shownAt[note.object] = [NSDate date];
+        [asking removeObjectForKey:note.object]; // it is well: nothing is to be started in its place
     }
 }
 
@@ -750,16 +750,24 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     [self start:[self device] != nil ? withPlacement([self device]) : nil];
 }
 
-- (void)startIfGone:(NSDictionary*)device tries:(int)tries
+- (void)startIfGone:(NSDictionary*)device asked:(NSNumber*)mine tries:(int)tries
 {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), dispatch_get_main_queue(), ^{
-        if (!streamRuns(device[@"name"])) {
-            [self start:device again:YES];
-        }
-        else if (tries > 1) {
-            [self startIfGone:device tries:tries - 1];
-        }
-    });
+    NSString* key = deviceId(device[@"name"]);
+    if (![asking[key] isEqual:mine]) {
+        return; // answered, or asked again since
+    }
+    if (!streamRuns(device[@"name"])) {
+        [asking removeObjectForKey:key];
+        [self start:device again:YES];
+    }
+    else if (tries > 1) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), dispatch_get_main_queue(), ^{
+            [self startIfGone:device asked:mine tries:tries - 1];
+        });
+    }
+    else {
+        [asking removeObjectForKey:key];
+    }
 }
 
 - (void)start:(NSDictionary*)asGiven
@@ -785,13 +793,14 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         // link would be for nothing. If it is gone within a few seconds, this
         // is started again, once.
         // (A stream that is well says so at once: "shown".)
+        // One such wait per device: a newer request takes its place, and the
+        // stream's answer ends it, whenever it comes (streamShown:).
         if (!again) {
-            NSDate* asked = [NSDate date];
+            static NSInteger count;
+            NSNumber* mine = @(++count);
+            asking[deviceId(deviceName)] = mine;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.7 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                NSDate* answered = shownAt[deviceId(deviceName)];
-                if (answered == nil || [answered compare:asked] == NSOrderedAscending) {
-                    [self startIfGone:device tries:16];
-                }
+                [self startIfGone:device asked:mine tries:16];
             });
         }
         return;
@@ -1032,7 +1041,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     running = [[NSMutableSet alloc] init];
     starting = [[NSMutableSet alloc] init];
     waiting = [[NSMutableDictionary alloc] init];
-    shownAt = [[NSMutableDictionary alloc] init];
+    asking = [[NSMutableDictionary alloc] init];
     [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(streamShown:) name:@"dev.eduwass.moonlight-next.shown" object:nil
                                             suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
     [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(streamUp:) name:@"dev.eduwass.moonlight-next.up" object:nil

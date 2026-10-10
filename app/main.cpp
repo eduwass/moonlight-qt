@@ -485,6 +485,13 @@ public:
                 finish();
                 return;
             }
+            // What Moonlight would have said in passing on its own screen (a
+            // setting the host cannot meet, and what is used in its place):
+            // into the log, where the stream's other facts are.
+            const QStringList warnings = session->property("launchWarnings").toStringList();
+            for (const QString& warning : warnings) {
+                qWarning().noquote() << "Launch warning:" << warning;
+            }
             session->start();
         });
         connect(m_Launcher, &CliStartStream::Launcher::failed, this, [this](QString text) {
