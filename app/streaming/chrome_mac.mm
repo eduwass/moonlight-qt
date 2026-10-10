@@ -945,8 +945,20 @@ bool chromeUnseen()
 {
     if (!s_Away) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "The screen is locked or asleep: frames are not drawn");
+        // Looked at again every two seconds until it is over: macOS says when
+        // the screen is unlocked and when the displays wake, but not in an
+        // order to be relied on, and a stream left undrawn for a notification
+        // that never came would stay black.
+        [NSTimer scheduledTimerWithTimeInterval:2 target:self selector:@selector(stillAway:) userInfo:nil repeats:YES];
     }
     s_Away = true;
+}
+- (void)stillAway:(NSTimer*)timer
+{
+    [self back:nil];
+    if (!s_Away) {
+        [timer invalidate];
+    }
 }
 - (void)back:(NSNotification*)note
 {
