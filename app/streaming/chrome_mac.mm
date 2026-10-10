@@ -13,6 +13,7 @@
 
 #include "chrome.h"
 #include "chrome_keys.h"
+#include "manager.h"
 
 #include "SDL_compat.h"
 #include <SDL_syswm.h>
@@ -747,6 +748,7 @@ static bool chromeTakes(int key, bool down, int sdlMods)
     NSWindow* window;
     NSTimer* end;
     id awake; // while out of sight: see closeAsked
+    NSDate* startedAt;
     bool hidden;
 }
 @end
@@ -836,6 +838,26 @@ bool chromeUnseen()
     if (seconds > 0) {
         end = [NSTimer scheduledTimerWithTimeInterval:seconds target:self selector:@selector(timeUp:) userInfo:nil repeats:NO];
     }
+}
+// Where the window is left, and how large, is remembered for its device, so
+// that it opens there the next time. Not what the app does to it as it starts,
+// not fullscreen, not while it is being put out of sight.
+- (void)placed:(NSNotification*)note
+{
+    if (note.object == window && -startedAt.timeIntervalSinceNow > 4) {
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(remember) object:nil];
+        [self performSelector:@selector(remember) withObject:nil afterDelay:1 inModes:@[NSRunLoopCommonModes]];
+    }
+}
+- (void)remember
+{
+    const char* device = getenv("MOONLIGHT_DEVICE");
+    if (device == nullptr || hidden || ![self live] || (window.styleMask & NSWindowStyleMaskFullScreen) || window.miniaturized) {
+        return;
+    }
+    NSRect frame = window.frame;
+    managerSetDeviceWindow([@(device) stringByRemovingPercentEncoding] ?: @(device), lround(frame.origin.x), lround(NSMaxY(frame)),
+                           lround(frame.size.width), lround(frame.size.height));
 }
 - (void)coverChanged:(NSNotification*)note
 {
@@ -927,6 +949,22 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         [bar addSubview:light];
         s_Lights[i] = light;
     }
+    // MOONLIGHT_WINDOW_AT=left,top (Cocoa's screen coordinates): where the
+    // device's window was left the last time. Once, as the stream opens, and
+    // only if enough of it would be on a screen to get hold of: the monitor it
+    // was on may be gone.
+    static bool placedOnce;
+    int left, topEdge;
+    if (!placedOnce && getenv("MOONLIGHT_WINDOW_AT") != nullptr && sscanf(getenv("MOONLIGHT_WINDOW_AT"), "%d,%d", &left, &topEdge) == 2) {
+        NSRect frame = NSMakeRect(left, topEdge - w.frame.size.height, w.frame.size.width, w.frame.size.height);
+        for (NSScreen* screen in NSScreen.screens) {
+            NSRect showing = NSIntersectionRect(screen.visibleFrame, frame);
+            if (!placedOnce && showing.size.width >= 200 && showing.size.height >= 100) {
+                [w setFrameTopLeftPoint:NSMakePoint(left, topEdge)];
+            }
+        }
+    }
+    placedOnce = true;
     // Each stream is an app of its own in the Dock, all with the same icon:
     // write on this one's which device it is.
     static bool named;
@@ -966,11 +1004,15 @@ void chromeStart(SDL_Window* window, void (*action)(int))
         s_Warm = [[ChromeWarm alloc] init];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(becameActive:) name:NSApplicationDidBecomeActiveNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(coverChanged:) name:NSWindowDidChangeOcclusionStateNotification object:nil];
+        [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(placed:) name:NSWindowDidMoveNotification object:nil];
+        [NSNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(placed:) name:NSWindowDidResizeNotification object:nil];
         [NSDistributedNotificationCenter.defaultCenter addObserver:s_Warm selector:@selector(told:) name:@"dev.eduwass.moonlight-next.stream" object:nil
                                                 suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
     }
     [s_Warm rest]; // whatever the last session left: its timer, its hold on App Nap
     s_Covered = false;
+    [s_Warm->startedAt release];
+    s_Warm->startedAt = [[NSDate date] retain];
     s_Warm->hidden = false;
     s_Warm->window = w;
     s_Lights[0].target = s_Warm;

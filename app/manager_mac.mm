@@ -37,6 +37,24 @@ static void saveDevices()
     [NSUserDefaults.standardUserDefaults setObject:s_Devices forKey:k_Devices];
 }
 
+// A device with its window's place and size as they are saved now: its stream,
+// a process of its own, writes them as the window is moved, after this one
+// read the list.
+static NSMutableDictionary* withPlacement(NSDictionary* device)
+{
+    NSMutableDictionary* placed = [[device mutableCopy] autorelease];
+    for (NSDictionary* saved in [NSUserDefaults.standardUserDefaults arrayForKey:k_Devices]) {
+        if ([saved[@"name"] isEqual:device[@"name"]]) {
+            for (NSString* key in @[@"windowLeft", @"windowTop", @"windowWidth", @"windowHeight"]) {
+                if (saved[key] != nil) {
+                    placed[key] = saved[key];
+                }
+            }
+        }
+    }
+    return placed;
+}
+
 // Moonlight's saved hosts, as it numbers them: index -> its settings prefix.
 static NSString* moonlightHostPrefix(NSString* host)
 {
@@ -560,7 +578,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 - (void)connect:(id)sender
 {
-    [self start:[self device]];
+    [self start:[self device] != nil ? withPlacement([self device]) : nil];
 }
 
 // Starts the stream of a device, or brings its window forward if it is open.
@@ -630,6 +648,10 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         environment[@"MOONLIGHT_DEVICE"] = deviceId(deviceName);
         environment[@"MOONLIGHT_FPS_ABOVE"] = rule;
         environment[@"MOONLIGHT_WINDOW"] = [NSString stringWithFormat:@"%ldx%ld", (long)w, (long)h];
+        if (device[@"windowLeft"] != nil && device[@"windowTop"] != nil) {
+            // where its window was left the last time: its left edge and its top
+            environment[@"MOONLIGHT_WINDOW_AT"] = [NSString stringWithFormat:@"%ld,%ld", (long)[device[@"windowLeft"] integerValue], (long)[device[@"windowTop"] integerValue]];
+        }
         if (fixed) environment[@"MOONLIGHT_FOLLOW"] = @"0";
         if (!fixed && [device[@"truePixels"] boolValue]) environment[@"MOONLIGHT_PANEL_PIXELS"] = @"1";
         if ([device[@"rawColor"] boolValue]) environment[@"MOONLIGHT_RAW_COLOR"] = @"1";
@@ -702,7 +724,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         for (NSDictionary* each in s_Devices) {
             NSString* value = each[key];
             if (device == nil && wanted.length > 0 && value.length > 0 && [value caseInsensitiveCompare:wanted] == NSOrderedSame) {
-                device = [[each mutableCopy] autorelease];
+                device = withPlacement(each);
             }
         }
     }
@@ -983,8 +1005,45 @@ NSArray* managerDevices()
     return s_Devices;
 }
 
+// The devices as they are saved now: another process may have changed them
+// since this one read them (the app's window and each stream are processes of
+// their own), and saving an old copy back would undo that.
+static void rereadDevices()
+{
+    NSArray* saved = [NSUserDefaults.standardUserDefaults arrayForKey:k_Devices];
+    if (saved == nil) {
+        return;
+    }
+    if (s_Devices == nil) {
+        s_Devices = [[NSMutableArray alloc] init];
+    }
+    [s_Devices removeAllObjects];
+    for (NSDictionary* each in saved) {
+        [s_Devices addObject:[[each mutableCopy] autorelease]];
+    }
+}
+
+void managerSetDeviceWindow(NSString* name, long left, long top, long width, long height)
+{
+    if (s_Manager == nil) {
+        rereadDevices(); // a stream's process: the device window's is the one that edits
+    }
+    for (NSMutableDictionary* device in managerDevices()) {
+        if ([device[@"name"] isEqualToString:name]) {
+            device[@"windowLeft"] = @(left);
+            device[@"windowTop"] = @(top);
+            device[@"windowWidth"] = @(width);
+            device[@"windowHeight"] = @(height);
+        }
+    }
+    saveDevices();
+}
+
 void managerSetDeviceBitrate(NSString* name, long kbps)
 {
+    if (s_Manager == nil) {
+        rereadDevices();
+    }
     for (NSMutableDictionary* device in managerDevices()) {
         if ([device[@"name"] isEqualToString:name]) {
             device[@"bitrate"] = @(kbps);

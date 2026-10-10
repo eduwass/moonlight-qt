@@ -16,4 +16,7 @@ void managerShow();
 NSArray* managerDevices();
 // Gives a device its own bitrate (kbps, 0 for automatic), by name.
 void managerSetDeviceBitrate(NSString* name, long kbps);
+// Remembers where a device's stream window was left and how large: its left
+// edge and its top in Cocoa's screen coordinates, and its size in points.
+void managerSetDeviceWindow(NSString* name, long left, long top, long width, long height);
 #endif
