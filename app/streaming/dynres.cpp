@@ -50,6 +50,7 @@
 // itself and a spinner (dynres_mac.mm). Other platforms show a blank window.
 #ifdef Q_OS_DARWIN
 void dynresBusy(SDL_Window* window, bool busy);
+void dynresUp();
 void sysKeysSessionStarted(); // syskeys_mac.mm; called from here because this is the fork's one hook into a session
 void cursorShareStart(const char* host); // cursorshare_mac.mm
 double dynresPanelScale(SDL_Window* window);
@@ -60,6 +61,7 @@ void dynresDropStaleViews(SDL_Window* window);
 void dynresFreeDroppedViews();
 #else
 static void dynresBusy(SDL_Window*, bool) {}
+static void dynresUp() {}
 static void sysKeysSessionStarted() {}
 static void cursorShareStart(const char*) {}
 static double dynresPanelScale(SDL_Window*) { return 1; }
@@ -395,6 +397,20 @@ bool Session::dynresTick()
     if (m_VideoDecoder == nullptr) {
         s_SeenWidth = s_SeenHeight = 0;
         return true;
+    }
+
+    // Once, when the first picture is on screen: the device window is holding
+    // up the last screenshot where this window is, and can take it away.
+    static Uint32 upAt;
+    static bool up;
+    if (!up && LiGetRTPVideoStats()->packetCountVideo != 0) {
+        if (upAt == 0) {
+            upAt = now ? now : 1;
+        }
+        else if (now - upAt >= DYNRES_FIRST_FRAME_MS) {
+            up = true;
+            dynresUp();
+        }
     }
 
     // With the stream settled, the views that earlier renderers left in the

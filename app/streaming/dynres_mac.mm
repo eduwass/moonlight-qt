@@ -48,6 +48,16 @@ static CGImageRef copyWindowContent(NSWindow* window)
     return content;
 }
 
+// Tells the device window (manager_mac.mm) that this stream has a picture.
+void dynresUp()
+{
+    const char* device = getenv("MOONLIGHT_DEVICE");
+    if (device != nullptr) {
+        [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.up" object:@(device)
+                                                                    userInfo:nil deliverImmediately:YES];
+    }
+}
+
 void dynresBusy(SDL_Window* window, bool busy)
 {
     @autoreleasepool {

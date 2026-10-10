@@ -124,6 +124,16 @@ static bool streamRuns(NSString* name)
     return false;
 }
 
+// Where a device's last screenshot is kept between runs of the app.
+static NSURL* pictureFile(NSString* name)
+{
+    NSURL* folder = [[NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject
+                     URLByAppendingPathComponent:NSBundle.mainBundle.bundleIdentifier ?: @"dev.eduwass.moonlight-next"];
+    [NSFileManager.defaultManager createDirectoryAtURL:folder withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString* safe = [deviceId(name) stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+    return [folder URLByAppendingPathComponent:[safe stringByAppendingString:@".shot"]];
+}
+
 static void tellStream(NSString* name, NSString* what)
 {
     [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.stream" object:deviceId(name)
@@ -170,6 +180,7 @@ static void tellStream(NSString* name, NSString* what)
     NSMutableSet<NSString*>* starting; // the devices whose stream is on its way: one start at a time each
     NSButton* endStream;
     int shooting; // screenshots on their way
+    NSMutableDictionary<NSString*, NSWindow*>* waiting; // by device id: what is shown where a stream is about to be
 }
 @end
 
@@ -362,6 +373,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         if (image != nil) {
             pictures[deviceName] = image;
             pictureTimes[deviceName] = [NSDate date];
+            [output writeToURL:pictureFile(deviceName) atomically:YES]; // for the next start of its stream, in any run of the app
         }
         if (--shooting == 0) {
             [spinner stopAnimation:nil];
@@ -552,6 +564,93 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 // ---- starting things
 
+// A window where the stream's is about to be, at once: the device's last
+// screenshot, dimmed, and a spinner. A stream takes a second or three to have
+// a picture, and until then there would be nothing to see for the click.
+// Taken away when the stream says it has one (dynresUp), or after 20 s.
+- (void)wait:(NSDictionary*)device
+{
+    NSString* key = deviceId(device[@"name"]);
+    if (waiting[key] != nil) {
+        return;
+    }
+    CGFloat w = [device[@"windowWidth"] integerValue] ?: 1920, h = [device[@"windowHeight"] integerValue] ?: 1080;
+    NSRect visible = NSScreen.mainScreen.visibleFrame;
+    w = MIN(w, visible.size.width);
+    h = MIN(h, visible.size.height);
+    NSRect frame = NSMakeRect(NSMidX(visible) - w / 2, NSMidY(visible) - h / 2, w, h);
+    if (device[@"windowLeft"] != nil && device[@"windowTop"] != nil) {
+        NSRect left = NSMakeRect([device[@"windowLeft"] integerValue], [device[@"windowTop"] integerValue] - h, w, h);
+        for (NSScreen* screen in NSScreen.screens) {
+            NSRect showing = NSIntersectionRect(screen.visibleFrame, left);
+            if (showing.size.width >= 200 && showing.size.height >= 100) {
+                frame = left; // the same test as the stream's own window (chromeStart)
+            }
+        }
+    }
+    NSWindow* shown = [[[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskFullSizeContentView
+                                                     backing:NSBackingStoreBuffered defer:NO] autorelease];
+    shown.releasedWhenClosed = NO;
+    shown.titlebarAppearsTransparent = YES;
+    shown.titleVisibility = NSWindowTitleHidden;
+    NSWindowButton kinds[] = {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton};
+    for (NSWindowButton kind : kinds) {
+        [shown standardWindowButton:kind].hidden = YES;
+    }
+    shown.backgroundColor = NSColor.blackColor;
+    shown.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    shown.level = NSFloatingWindowLevel; // above the stream's window, which comes up black under it
+    shown.ignoresMouseEvents = YES;
+    [shown setFrame:frame display:NO];
+
+    NSView* content = shown.contentView;
+    NSImage* last = pictures[device[@"name"]] ?: [[[NSImage alloc] initWithContentsOfURL:pictureFile(device[@"name"])] autorelease];
+    if (last != nil) {
+        NSImageView* view = [[[NSImageView alloc] initWithFrame:content.bounds] autorelease];
+        view.image = last;
+        view.imageScaling = NSImageScaleProportionallyUpOrDown;
+        view.alphaValue = 0.45;
+        view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [content addSubview:view];
+    }
+    NSProgressIndicator* turning = [[[NSProgressIndicator alloc] initWithFrame:NSMakeRect(NSMidX(content.bounds) - 16, NSMidY(content.bounds) - 4, 32, 32)] autorelease];
+    turning.style = NSProgressIndicatorStyleSpinning;
+    turning.indeterminate = YES;
+    [turning startAnimation:nil];
+    [content addSubview:turning];
+    NSTextField* says = label([NSString stringWithFormat:@"Connecting to %@…", device[@"name"]], 13, NSFontWeightMedium, NSColor.whiteColor);
+    [says sizeToFit];
+    [says setFrameOrigin:NSMakePoint(round(NSMidX(content.bounds) - says.frame.size.width / 2), NSMidY(content.bounds) - 34)];
+    [content addSubview:says];
+
+    waiting[key] = shown;
+    [shown orderFrontRegardless];
+    [self performSelector:@selector(waited:) withObject:key afterDelay:20];
+}
+
+- (void)waited:(NSString*)key
+{
+    NSWindow* shown = [[waiting[key] retain] autorelease];
+    if (shown == nil) {
+        return;
+    }
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(waited:) object:key];
+    [waiting removeObjectForKey:key];
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext* context) {
+        context.duration = 0.15;
+        shown.animator.alphaValue = 0;
+    } completionHandler:^{
+        [shown orderOut:nil];
+    }];
+}
+
+- (void)streamUp:(NSNotification*)note
+{
+    if ([note.object isKindOfClass:[NSString class]]) {
+        [self waited:note.object];
+    }
+}
+
 - (void)launch:(NSArray<NSString*>*)arguments environment:(NSDictionary<NSString*, NSString*>*)environment for:(NSString*)deviceName
 {
     NSWorkspaceOpenConfiguration* configuration = [NSWorkspaceOpenConfiguration configuration];
@@ -565,6 +664,9 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         dispatch_async(dispatch_get_main_queue(), ^{
             if (app != nil && deviceName != nil) {
                 [running addObject:deviceName];
+            }
+            else if (deviceName != nil) {
+                [self waited:deviceId(deviceName)]; // it did not start
             }
             if (deviceName != nil) {
                 [starting removeObject:deviceName];
@@ -597,6 +699,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         return;
     }
     [starting addObject:deviceName];
+    [self wait:device];
     connect.enabled = NO;
     statusLine.stringValue = [device[@"before"] length] > 0 ? @"Waking it…" : @"Connecting…";
 
@@ -607,6 +710,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
             stillThere |= [each[@"name"] isEqual:deviceName];
         }
         if (!stillThere) {
+            [self waited:deviceId(deviceName)];
             [starting removeObject:deviceName];
             connect.enabled = YES;
             [self show];
@@ -805,6 +909,9 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     pictureTimes = [[NSMutableDictionary alloc] init];
     running = [[NSMutableSet alloc] init];
     starting = [[NSMutableSet alloc] init];
+    waiting = [[NSMutableDictionary alloc] init];
+    [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(streamUp:) name:@"dev.eduwass.moonlight-next.up" object:nil
+                                            suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
 
     window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 940, 700)
                                          styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
