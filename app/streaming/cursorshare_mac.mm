@@ -33,6 +33,7 @@ static void* s_Cursor;  // an SDL 3 cursor; main thread only
 static SDL_atomic_t s_Listening;
 static SDL_atomic_t s_Connected; // how many connections of the host's helper are being listened to (one, but for a moment)
 static SDL_atomic_t s_Serving;   // its connection, to let go of when a newer one comes
+static SDL_atomic_t s_OverSsh;   // the helper is being read over ssh instead (fetchOverSsh)
 static bool s_Plain;             // a host with no helper: a plain arrow, and nothing to wait for
 
 // ponytail: the SDL 2 we link is sdl2-compat, a layer over SDL 3, and the SDL 2
@@ -137,7 +138,10 @@ static void apply(NSData* png, int width, int height, int hotX, int hotY)
     s_Cursor = cursor;
 }
 
-static void serve(FILE* in)
+// `counted`, if given, is set once the first cursor has come, and the helper
+// counted as connected then: over ssh there is nothing before that to say it
+// is really there.
+static void serve(FILE* in, bool* counted = nullptr)
 {
     for (;;) {
         // A short line, read whole, so a peer cannot feed the parser without end.
@@ -154,6 +158,11 @@ static void serve(FILE* in)
         if (fread(png.mutableBytes, 1, length, in) != length) {
             [png release];
             break;
+        }
+        if (counted != nullptr && !*counted) {
+            *counted = true;
+            SDL_AtomicAdd(&s_Connected, 1);
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Cursor shapes: coming over ssh");
         }
         // The main thread is inside SDL's event loop, which runs the main queue.
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -190,7 +199,10 @@ static int listenForCursors(void*)
         }
         char from[INET_ADDRSTRLEN] = "";
         inet_ntop(AF_INET, &peer.sin_addr, from, sizeof(from));
-        if (strcmp(from, s_Host) != 0) {
+        // Not from anyone but the host, and not while the helper is on the
+        // line over ssh: two of them would each tell the host when they go,
+        // and its cursor would be back in the picture with one still here.
+        if (strcmp(from, s_Host) != 0 || SDL_AtomicGet(&s_OverSsh) != 0) {
             close(fd);
             continue;
         }
@@ -228,6 +240,52 @@ static int listenForCursors(void*)
     }
 }
 
+// The other way to the same helper: started over ssh, its output read here.
+// For a host where macOS does not let the helper reach this Mac (it asks
+// whether "sunshine" may find devices on the local network, again after every
+// re-signed build, and "Don't Allow" fails without a word); what ssh starts
+// is not asked. Tried for as long as the app runs, while the helper has not
+// come by itself. MOONLIGHT_CLIPBOARD names the ssh destination.
+static int fetchOverSsh(void* destination)
+{
+    NSString* host = (NSString*)destination; // kept for good
+    for (;;) {
+        sleep(3); // the helper's own connection first, if it can
+        if (SDL_AtomicGet(&s_Serving) != 0 || s_Plain) {
+            continue;
+        }
+        @autoreleasepool {
+            NSTask* task = [[[NSTask alloc] init] autorelease];
+            task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/ssh"];
+            task.arguments = @[@"-o", @"BatchMode=yes", @"-o", @"ConnectTimeout=4", @"-o", @"ServerAliveInterval=2", @"-o", @"ServerAliveCountMax=2",
+                               @"-o", @"ControlMaster=auto", @"-o", [NSString stringWithFormat:@"ControlPath=%@/.ssh/cm-%%C", NSHomeDirectory()],
+                               @"-o", @"ControlPersist=600", @"--", host,
+                               @"p=$(pgrep -x sunshine | head -1); [ -n \"$p\" ] && exec ~/.local/bin/cursor-share --stdio $p"];
+            NSPipe* out = [NSPipe pipe];
+            task.standardOutput = out;
+            task.standardInput = [NSFileHandle fileHandleWithNullDevice];
+            task.standardError = [NSFileHandle fileHandleWithNullDevice];
+            if (![task launchAndReturnError:nil]) {
+                continue;
+            }
+            SDL_AtomicSet(&s_OverSsh, 1);
+            FILE* in = fdopen(dup(out.fileHandleForReading.fileDescriptor), "r");
+            bool counted = false;
+            if (in != nullptr) {
+                serve(in, &counted);
+                fclose(in);
+            }
+            if (counted) {
+                SDL_AtomicAdd(&s_Connected, -1);
+            }
+            SDL_AtomicSet(&s_OverSsh, 0);
+            [task terminate]; // the helper sees its output closed and goes
+            [task waitUntilExit];
+        }
+    }
+    return 0;
+}
+
 bool cursorShareWaiting()
 {
     return getenv("MOONLIGHT_LOCAL_CURSOR") != nullptr && !s_Plain && SDL_AtomicGet(&s_Connected) == 0;
@@ -244,5 +302,13 @@ void cursorShareStart(const char* host)
     s_Cursor = nullptr;
     if (SDL_AtomicCAS(&s_Listening, 0, 1)) {
         SDL_DetachThread(SDL_CreateThread(listenForCursors, "cursor shapes", nullptr));
+    }
+    static bool fetching;
+    const char* destination = getenv("MOONLIGHT_CLIPBOARD");
+    NSCharacterSet* other = [[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_@"] invertedSet];
+    if (!fetching && !s_Plain && destination != nullptr && destination[0] != 0 && destination[0] != '-' && strlen(destination) <= 128 &&
+            [@(destination) rangeOfCharacterFromSet:other].location == NSNotFound) {
+        fetching = true;
+        SDL_DetachThread(SDL_CreateThread(fetchOverSsh, "cursor shapes over ssh", [@(destination) retain]));
     }
 }
