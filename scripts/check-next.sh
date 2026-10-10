@@ -30,6 +30,16 @@ for v in $(grep -h -o -E '"MOONLIGHT_[A-Z_]+"' -r app --include=*.cpp --include=
   esac
 done
 
+# Every switch the device window sets for one stream is one it takes out again
+# before starting anything else (plainEnvironment): a stream's process can
+# start the device window, and that one the next stream, with its switches
+# still in the environment. A switch set and not taken out would follow along.
+taken=$(sed -n '/^static NSMutableDictionary\* plainEnvironment()/,/^}/p' app/manager_mac.mm | grep -o '@"[A-Z_]*"' | tr -d '@"' | sort -u)
+[ -n "$taken" ] || bad "found no list in plainEnvironment() in app/manager_mac.mm (has the code moved?)"
+for v in $(grep -o -E 'environment\[@"MOONLIGHT_[A-Z_]+"\]|@\{@"MOONLIGHT_[A-Z_]+"' app/manager_mac.mm | grep -o 'MOONLIGHT_[A-Z_]*' | sed 's/^MOONLIGHT_//' | sort -u); do
+  echo "$taken" | grep -qx "$v" || bad "MOONLIGHT_$v is set for a stream in app/manager_mac.mm and not taken out in plainEnvironment()"
+done
+
 if [ "${1:-}" = --site ]; then
   (cd site && bun install --frozen-lockfile >/dev/null 2>&1 && bun run build >/dev/null 2>&1) || bad "the docs site does not build"
 fi
