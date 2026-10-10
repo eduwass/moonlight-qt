@@ -661,9 +661,48 @@ static NSData* tarOf(NSString* in, NSArray<NSString*>* arguments)
     return archive;
 }
 
-int main()
+// selftest fetch <ssh destination, or - for this machine> <mac|linux>: what the
+// app would fetch from that machine's clipboard when it holds files, with the
+// very commands it sends, and what its reader makes of the answer.
+static int fetchFrom(const char* destination, bool linux)
+{
+    s_Linux = linux;
+    s_Destination = [@(destination) copy];
+    NSString* command = [NSString stringWithFormat:@"%@%@true", linux ? [k_Wayland stringByAppendingString:k_LinuxListFiles] : k_MacListFiles, k_SendFilesOr];
+    NSData* got = nil;
+    if (strcmp(destination, "-") == 0) {
+        NSTask* task = [[[NSTask alloc] init] autorelease];
+        task.executableURL = [NSURL fileURLWithPath:@"/bin/sh"];
+        task.arguments = @[@"-c", command];
+        NSPipe* out = [NSPipe pipe];
+        task.standardOutput = out;
+        task.standardError = [NSFileHandle fileHandleWithNullDevice];
+        [task launchAndReturnError:nil];
+        got = [out.fileHandleForReading readDataToEndOfFile];
+        [task waitUntilExit];
+    }
+    else {
+        got = remote(command, nil, CLIPBOARD_MAX_FILES + (1 << 20), CLIPBOARD_SECONDS(CLIPBOARD_MAX_FILES));
+    }
+    if (got.length > 6 && memcmp(got.bytes, "files\n", 6) == 0) {
+        NSString* to = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-fetch-%d", getpid()]];
+        [NSFileManager.defaultManager createDirectoryAtPath:to withIntermediateDirectories:YES attributes:nil error:nil];
+        NSArray<NSString*>* names = unpack([got subdataWithRange:NSMakeRange(6, got.length - 6)], to);
+        printf("files: %s\n", names == nil ? "refused" : [[names sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@" | "].UTF8String);
+        [NSFileManager.defaultManager removeItemAtPath:to error:nil];
+    }
+    else {
+        printf("no files (%lu bytes came)\n", (unsigned long)got.length);
+    }
+    return 0;
+}
+
+int main(int argc, char** argv)
 {
     @autoreleasepool {
+        if (argc == 4 && strcmp(argv[1], "fetch") == 0) {
+            return fetchFrom(argv[2], strcmp(argv[3], "linux") == 0);
+        }
         NSFileManager* manager = NSFileManager.defaultManager;
         NSString* root = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-selftest-%d", getpid()]];
         NSString* from = [root stringByAppendingPathComponent:@"from"], *inner = [from stringByAppendingPathComponent:@"folder"];
