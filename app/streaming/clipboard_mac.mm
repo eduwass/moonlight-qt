@@ -167,10 +167,13 @@ static NSData* tar(NSArray<NSURL*>* files, NSData* archive, NSString* folder)
     return task.terminationStatus == 0 ? got : nil;
 }
 
+// (The Mac one writes until the clipboard has them all: a script that writes
+// several files and leaves at once left only the first there, nine times in
+// ten, measured.)
 // For the other machine. Putting files on its clipboard: the archive comes on
 // standard input. Taking them off: "files" on a first line, then the archive;
 // nothing if its clipboard holds no files (or a folder, or too much).
-static NSString* const k_MacSetFiles = @(R"SH(d="$HOME/Library/Caches/moonlightnext-clipboard"; rm -rf "$d"; mkdir -p "$d" && /usr/bin/tar -xf - -C "$d" && D="$d" osascript -l JavaScript -e 'ObjC.import("AppKit"); ObjC.import("stdlib"); var d = $.getenv("D"); var names = $.NSFileManager.defaultManager.contentsOfDirectoryAtPathError(d, null); var a = $.NSMutableArray.alloc.init; for (var i = 0; i < names.count; i++) a.addObject($.NSURL.fileURLWithPath(d + "/" + names.objectAtIndex(i).js)); var pb = $.NSPasteboard.generalPasteboard; pb.clearContents; pb.writeObjects(a);' >/dev/null)SH");
+static NSString* const k_MacSetFiles = @(R"SH(d="$HOME/Library/Caches/moonlightnext-clipboard"; rm -rf "$d"; mkdir -p "$d" && /usr/bin/tar -xf - -C "$d" && D="$d" osascript -l JavaScript -e 'ObjC.import("AppKit"); ObjC.import("stdlib"); var d = $.getenv("D"); var names = $.NSFileManager.defaultManager.contentsOfDirectoryAtPathError(d, null); var a = $.NSMutableArray.alloc.init; for (var i = 0; i < names.count; i++) a.addObject($.NSURL.fileURLWithPath(d + "/" + names.objectAtIndex(i).js)); var pb = $.NSPasteboard.generalPasteboard; for (var k = 0; k < 8; k++) { pb.clearContents; pb.writeObjects(a); if (pb.pasteboardItems.count == a.count) break; delay(0.05); }' >/dev/null)SH");
 static NSString* const k_LinuxSetFiles = @(R"SH(d="$HOME/.cache/moonlightnext-clipboard"; rm -rf "$d"; mkdir -p "$d" && tar -xf - -C "$d" && python3 -c 'import os,sys,urllib.parse; d=sys.argv[1]; sys.stdout.write("".join("file://"+urllib.parse.quote(os.path.join(d,n))+"\r\n" for n in sorted(os.listdir(d))))' "$d" | wl-copy -t text/uri-list >/dev/null 2>&1)SH");
 static NSString* const k_MacListFiles = @(R"SH(l=$(osascript -l JavaScript -e 'ObjC.import("AppKit"); var u = $.NSPasteboard.generalPasteboard.readObjectsForClassesOptions($.NSArray.arrayWithObject($.NSURL), $({NSPasteboardURLReadingFileURLsOnly: true})); var o = []; for (var i = 0; u && i < u.count; i++) o.push(u.objectAtIndex(i).path.js); o.join("\n")' 2>/dev/null); )SH");
 static NSString* const k_LinuxListFiles = @(R"SH(l=$(wl-paste -l 2>/dev/null | grep -qx text/uri-list && wl-paste -t text/uri-list 2>/dev/null | python3 -c 'import sys,urllib.parse; [print(urllib.parse.unquote(u.strip()[7:])) for u in sys.stdin if u.startswith("file://")]'); )SH");
