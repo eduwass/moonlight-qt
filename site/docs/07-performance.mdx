@@ -42,13 +42,14 @@ From the action to the first picture of the stream, on the watching Mac's clock.
 
 | Action | 13" over Thunderbolt | PC over Wi-Fi |
 | --- | --- | --- |
+| Open a device by link, app not running | 1.6–1.9 s | 1.6 s |
 | Open a device by link, app already open | 1.2 s | 1.1–1.35 s |
 | Resize the window | 2.5–3.5 s, 2.9 s on average | 1.35 s |
 | Bring a warm stream's window back | 0.4 s | 0.4 s |
 
 The app's own window is up 0.7 s after it is started.
 
-The PC's numbers are with a Sunshine that tries its encoders once, when it starts. The version its graphics card is held to tries them at every launch, five times a quarter second: with that one, a connect took 3.0 s and a resize 2.7 s. See [Hosts](/hosts). Of a resize on the Mac host, 1.3 s is its virtual display taking the new size and capture starting again. A stream's process no longer loads Moonlight's own screens, which was half a second of every connect; with the app not running yet, add about 0.4 s for it to start.
+The PC's numbers are with a Sunshine that tries its encoders once, when it starts. The version its graphics card is held to tries them at every launch, five times a quarter second: with that one, a connect took 3.0 s and a resize 2.7 s. See [Hosts](/hosts). Of a resize on the Mac host, 1.3 s is its virtual display taking the new size and capture starting again. A stream's process no longer loads Moonlight's own screens, which was half a second of every connect; with the app not running yet, its own start is another 0.3 to 0.6 s.
 
 ## What a stream costs the watching Mac
 
