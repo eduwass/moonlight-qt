@@ -359,6 +359,21 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
 @interface ClipboardShare : NSObject
 @end
 
+// The command that fetches the other machine's clipboard: what it holds, said
+// on a first line ("files", "text" or "png"), then that.
+static NSString* fetchCommand()
+{
+    NSString* rest = !s_Linux ?
+        @"if [ \"$(/usr/bin/pbpaste | wc -c)\" -gt 0 ]; then echo text; /usr/bin/pbpaste; else f=$(mktemp); "
+         "osascript -e \"set d to the clipboard as «class PNGf»\" -e \"set h to open for access POSIX file \\\"$f\\\" with write permission\" "
+         "-e \"write d to h\" -e \"close access h\" >/dev/null 2>&1; if [ -s $f ]; then echo png; cat $f; fi; rm -f $f; fi" :
+        [k_Wayland stringByAppendingString:
+        @"t=$(wl-paste -l 2>/dev/null); "
+         "if printf '%s\\n' \"$t\" | grep -q '^text/plain'; then echo text; wl-paste -n -t text 2>/dev/null; "
+         "elif printf '%s\\n' \"$t\" | grep -qx 'image/png'; then echo png; wl-paste -t image/png 2>/dev/null; fi"];
+    return [NSString stringWithFormat:@"%@%@%@", s_Linux ? [k_Wayland stringByAppendingString:k_LinuxListFiles] : k_MacListFiles, k_SendFilesOr, rest];
+}
+
 @implementation ClipboardShare
 // To the front: what was copied here since last time goes over.
 - (void)toFront:(NSNotification*)note
@@ -486,15 +501,7 @@ if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then 
     // What it holds, said on a first line: "files", "text" or "png". Files if
     // there are any (their names are there as text too); else text if there is
     // any; a picture only when that is all there is.
-    NSString* rest = !s_Linux ?
-        @"if [ \"$(/usr/bin/pbpaste | wc -c)\" -gt 0 ]; then echo text; /usr/bin/pbpaste; else f=$(mktemp); "
-         "osascript -e \"set d to the clipboard as «class PNGf»\" -e \"set h to open for access POSIX file \\\"$f\\\" with write permission\" "
-         "-e \"write d to h\" -e \"close access h\" >/dev/null 2>&1; if [ -s $f ]; then echo png; cat $f; fi; rm -f $f; fi" :
-        [k_Wayland stringByAppendingString:
-        @"t=$(wl-paste -l 2>/dev/null); "
-         "if printf '%s\\n' \"$t\" | grep -q '^text/plain'; then echo text; wl-paste -n -t text 2>/dev/null; "
-         "elif printf '%s\\n' \"$t\" | grep -qx 'image/png'; then echo png; wl-paste -t image/png 2>/dev/null; fi"];
-    NSString* command = [NSString stringWithFormat:@"%@%@%@", s_Linux ? [k_Wayland stringByAppendingString:k_LinuxListFiles] : k_MacListFiles, k_SendFilesOr, rest];
+    NSString* command = fetchCommand();
     dispatch_async(s_Queue, ^{
         NSData* got = remote(command, nil, CLIPBOARD_MAX_FILES + (1 << 20), CLIPBOARD_SECONDS(CLIPBOARD_MAX_FILES));
         NSString* text = nil;
@@ -668,7 +675,7 @@ static int fetchFrom(const char* destination, bool linux)
 {
     s_Linux = linux;
     s_Destination = [@(destination) copy];
-    NSString* command = [NSString stringWithFormat:@"%@%@true", linux ? [k_Wayland stringByAppendingString:k_LinuxListFiles] : k_MacListFiles, k_SendFilesOr];
+    NSString* command = fetchCommand();
     NSData* got = nil;
     if (strcmp(destination, "-") == 0) {
         NSTask* task = [[[NSTask alloc] init] autorelease];
@@ -691,8 +698,16 @@ static int fetchFrom(const char* destination, bool linux)
         printf("files: %s\n", names == nil ? "refused" : [[names sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@" | "].UTF8String);
         [NSFileManager.defaultManager removeItemAtPath:to error:nil];
     }
+    else if (got.length > 5 && memcmp(got.bytes, "text\n", 5) == 0) {
+        NSString* text = [[[NSString alloc] initWithData:[got subdataWithRange:NSMakeRange(5, got.length - 5)] encoding:NSUTF8StringEncoding] autorelease];
+        printf("text: %lu bytes, %s\n", (unsigned long)got.length - 5, text == nil ? "not readable as text" : [NSString stringWithFormat:@"begins %@", [[text substringToIndex:MIN(text.length, (NSUInteger)24)] stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"]].UTF8String);
+    }
+    else if (got.length > 4 && memcmp(got.bytes, "png\n", 4) == 0) {
+        NSImage* picture = [[[NSImage alloc] initWithData:[got subdataWithRange:NSMakeRange(4, got.length - 4)]] autorelease];
+        printf("png: %lu bytes, %s\n", (unsigned long)got.length - 4, picture != nil ? [NSString stringWithFormat:@"%.0f x %.0f", picture.size.width, picture.size.height].UTF8String : "not a picture");
+    }
     else {
-        printf("no files (%lu bytes came)\n", (unsigned long)got.length);
+        printf("nothing (%lu bytes came)\n", (unsigned long)got.length);
     }
     return 0;
 }
