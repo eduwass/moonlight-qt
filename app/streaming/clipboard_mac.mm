@@ -12,7 +12,12 @@
 // pastes on the other). On a Linux machine through wl-copy and wl-paste; on a
 // Mac text through pbcopy and pbpaste, and pictures, which those two cannot
 // carry, through an AppleScript one-liner and a temporary file.
-// ponytail: no files.
+// Files copied in the Finder (or a file manager over there) go too, up to
+// 200 MB together: packed with tar, unpacked into a cache folder at the other
+// end, and put on that clipboard as files.
+// ponytail: a transfer is held in memory whole (a 200 MB copy is 200 MB of
+// this app for a moment); folders are not taken. Upgrade path: stream the tar
+// straight between the two processes.
 
 #include "SDL_compat.h"
 
@@ -20,6 +25,8 @@
 
 #define CLIPBOARD_MAX_BYTES (1024 * 1024)
 #define CLIPBOARD_MAX_PICTURE (20 * 1024 * 1024)
+#define CLIPBOARD_MAX_FILES (200 * 1024 * 1024)
+#define CLIPBOARD_MAX_FILE_COUNT 64
 #define CLIPBOARD_MAX_TIFF (96 * 1024 * 1024) // a picture not yet PNG: more than this is not even looked at
 // An ssh that has not finished in time is ended: six seconds, and one more
 // for every 250 kB it has to carry (a 20 MB picture over slow Wi-Fi).
@@ -31,6 +38,7 @@ static dispatch_queue_t s_Queue; // one transfer at a time, in order
 // Main thread only:
 static NSString* s_Both;       // the text both sides are known to have
 static NSData* s_BothPicture;  // or the picture, as PNG
+static NSString* s_BothFiles;  // or the files: see filesKey
 static NSInteger s_Seen = -1;  // this Mac's pasteboard change count when it last had nothing more to send
 static NSInteger s_Turn;       // counts this app's comings to the front
 static NSInteger s_Sending = -1; // the change count of what is on its way over, if anything is
@@ -86,6 +94,92 @@ static NSData* remote(NSString* command, NSData* input, NSUInteger most, NSUInte
 static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); "
                                     "export WAYLAND_DISPLAY=$(ls $XDG_RUNTIME_DIR | grep -m1 '^wayland-[0-9]*$'); ";
 
+// What a set of files is known by: each one's name, size and time of last
+// change. tar carries all three across, so the copy at the other end has the
+// same.
+static NSString* filesKey(NSArray<NSURL*>* files)
+{
+    NSMutableArray* parts = [NSMutableArray array];
+    for (NSURL* file in files) {
+        NSDictionary* about = [NSFileManager.defaultManager attributesOfItemAtPath:file.path error:nil];
+        [parts addObject:[NSString stringWithFormat:@"%@|%llu|%.0f", file.lastPathComponent, about.fileSize, about.fileModificationDate.timeIntervalSince1970]];
+    }
+    return [[parts sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@"\n"];
+}
+
+// The plain files among them, or nil if they cannot be sent as they are: a
+// folder among them, too many, too much.
+static NSArray<NSURL*>* sendable(NSArray<NSURL*>* files)
+{
+    unsigned long long total = 0;
+    for (NSURL* file in files) {
+        NSDictionary* about = [NSFileManager.defaultManager attributesOfItemAtPath:file.path error:nil];
+        if (![about.fileType isEqualToString:NSFileTypeRegular]) {
+            return nil;
+        }
+        total += about.fileSize;
+    }
+    return files.count > 0 && files.count <= CLIPBOARD_MAX_FILE_COUNT && total <= CLIPBOARD_MAX_FILES ? files : nil;
+}
+
+// Runs tar here. Packing: gives back the archive of `files`. Unpacking: puts
+// `archive` into `folder`. nil if it failed.
+static NSData* tar(NSArray<NSURL*>* files, NSData* archive, NSString* folder)
+{
+    NSTask* task = [[[NSTask alloc] init] autorelease];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/tar"];
+    NSMutableArray* arguments = [NSMutableArray array];
+    if (archive != nil) {
+        // tar takes no name that climbs out of the folder (no -P here).
+        [arguments addObjectsFromArray:@[@"-xf", @"-", @"-C", folder]];
+    }
+    else {
+        [arguments addObjectsFromArray:@[@"-cf", @"-"]];
+        for (NSURL* file in files) {
+            // (A name that begins with a dash would be taken for an option; "--"
+            // would end the options for good, and the next file's -C with them.)
+            NSString* name = file.lastPathComponent;
+            [arguments addObjectsFromArray:@[@"-C", file.path.stringByDeletingLastPathComponent, [name hasPrefix:@"-"] ? [@"./" stringByAppendingString:name] : name]];
+        }
+    }
+    task.arguments = arguments;
+    NSPipe* in = [NSPipe pipe];
+    NSPipe* out = [NSPipe pipe];
+    task.standardInput = in;
+    task.standardOutput = out;
+    task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    if (![task launchAndReturnError:nil]) {
+        return nil;
+    }
+    // Fed from another thread: tar may print before it has read everything.
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            if (archive != nil) {
+                [in.fileHandleForWriting writeData:archive];
+            }
+            [in.fileHandleForWriting closeFile];
+        }
+        @catch (NSException*) {
+        }
+    });
+    NSData* got = [out.fileHandleForReading readDataToEndOfFile];
+    [task waitUntilExit];
+    return task.terminationStatus == 0 ? got : nil;
+}
+
+// For the other machine. Putting files on its clipboard: the archive comes on
+// standard input. Taking them off: "files" on a first line, then the archive;
+// nothing if its clipboard holds no files (or a folder, or too much).
+static NSString* const k_MacSetFiles = @(R"SH(d="$HOME/Library/Caches/moonlightnext-clipboard"; rm -rf "$d"; mkdir -p "$d" && /usr/bin/tar -xf - -C "$d" && D="$d" osascript -l JavaScript -e 'ObjC.import("AppKit"); ObjC.import("stdlib"); var d = $.getenv("D"); var names = $.NSFileManager.defaultManager.contentsOfDirectoryAtPathError(d, null); var a = $.NSMutableArray.alloc.init; for (var i = 0; i < names.count; i++) a.addObject($.NSURL.fileURLWithPath(d + "/" + names.objectAtIndex(i).js)); var pb = $.NSPasteboard.generalPasteboard; pb.clearContents; pb.writeObjects(a);' >/dev/null)SH");
+static NSString* const k_LinuxSetFiles = @(R"SH(d="$HOME/.cache/moonlightnext-clipboard"; rm -rf "$d"; mkdir -p "$d" && tar -xf - -C "$d" && python3 -c 'import os,sys,urllib.parse; d=sys.argv[1]; sys.stdout.write("".join("file://"+urllib.parse.quote(os.path.join(d,n))+"\r\n" for n in sorted(os.listdir(d))))' "$d" | wl-copy -t text/uri-list >/dev/null 2>&1)SH");
+static NSString* const k_MacListFiles = @(R"SH(l=$(osascript -l JavaScript -e 'ObjC.import("AppKit"); var u = $.NSPasteboard.generalPasteboard.readObjectsForClassesOptions($.NSArray.arrayWithObject($.NSURL), $({NSPasteboardURLReadingFileURLsOnly: true})); var o = []; for (var i = 0; u && i < u.count; i++) o.push(u.objectAtIndex(i).path.js); o.join("\n")' 2>/dev/null); )SH");
+static NSString* const k_LinuxListFiles = @(R"SH(l=$(wl-paste -l 2>/dev/null | grep -qx text/uri-list && wl-paste -t text/uri-list 2>/dev/null | python3 -c 'import sys,urllib.parse; [print(urllib.parse.unquote(u.strip()[7:])) for u in sys.stdin if u.startswith("file://")]'); )SH");
+// After either of the two above: the files of $l as an archive, or else what follows this.
+static NSString* const k_SendFilesOr = @(R"SH(set --; n=0; bad=0; while IFS= read -r f; do [ -n "$f" ] || continue; [ -f "$f" ] || { bad=1; continue; }; n=$((n + $(wc -c < "$f"))); set -- "$@" -C "$(dirname "$f")" "$(basename "$f")"; done <<LIST
+$l
+LIST
+if [ $# -gt 0 ] && [ $bad = 0 ] && [ $# -le 192 ] && [ $n -le 209715200 ]; then echo files; tar -cf - "$@"; exit; fi; [ -z "$l" ] || exit 0; )SH");
+
 @interface ClipboardShare : NSObject
 @end
 
@@ -99,6 +193,43 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
     // Nothing new, or the same thing is on its way already: sent twice, the
     // second could land on top of something copied over there in between.
     if (count == s_Seen || count == s_Sending) {
+        return;
+    }
+    // Files first: the Finder puts their names on the pasteboard as text too,
+    // and a name is not what was copied.
+    NSArray<NSURL*>* copied = [board readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    if (copied.count > 0) {
+        NSArray<NSURL*>* files = sendable(copied);
+        NSString* key = files != nil ? filesKey(files) : nil;
+        if (files == nil || [key isEqualToString:s_BothFiles] ||
+                [board.types containsObject:@"org.nspasteboard.ConcealedType"] || [board.types containsObject:@"org.nspasteboard.TransientType"]) {
+            s_Seen = count; // nothing to send: a folder, too much, or what is there already
+            return;
+        }
+        NSString* command = s_Linux ? [k_Wayland stringByAppendingString:k_LinuxSetFiles] : k_MacSetFiles;
+        s_Sending = count;
+        dispatch_async(s_Queue, ^{
+            @autoreleasepool {
+                NSData* archive = tar(files, nil, nil);
+                bool sent = archive != nil && remote(command, archive, 0, CLIPBOARD_SECONDS(archive.length)) != nil;
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: %lu files, %lu bytes %s", (unsigned long)files.count,
+                            (unsigned long)archive.length, sent ? "sent" : "could not be sent; they are tried again the next time");
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (s_Sending == count) {
+                        s_Sending = -1;
+                    }
+                    if (sent) {
+                        [s_Both release];
+                        [s_BothPicture release];
+                        [s_BothFiles release];
+                        s_Both = nil;
+                        s_BothPicture = nil;
+                        s_BothFiles = [key copy];
+                        s_Seen = count;
+                    }
+                });
+            }
+        });
         return;
     }
     NSString* text = [board stringForType:NSPasteboardTypeString];
@@ -144,8 +275,10 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
                 if (sent) {
                     [s_Both release];
                     [s_BothPicture release];
+                    [s_BothFiles release];
                     s_Both = isPicture ? nil : [text copy];
                     s_BothPicture = [picture copy];
+                    s_BothFiles = nil;
                 }
                 if (sent || !wanted) {
                     s_Seen = count;
@@ -170,9 +303,10 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
         return; // something copied here has not got there yet: it is the newer
     }
     NSInteger turn = s_Turn;
-    // What it holds, said on a first line: "text" or "png". Text if there is
+    // What it holds, said on a first line: "files", "text" or "png". Files if
+    // there are any (their names are there as text too); else text if there is
     // any; a picture only when that is all there is.
-    NSString* command = !s_Linux ?
+    NSString* rest = !s_Linux ?
         @"if [ \"$(/usr/bin/pbpaste | wc -c)\" -gt 0 ]; then echo text; /usr/bin/pbpaste; else f=$(mktemp); "
          "osascript -e \"set d to the clipboard as «class PNGf»\" -e \"set h to open for access POSIX file \\\"$f\\\" with write permission\" "
          "-e \"write d to h\" -e \"close access h\" >/dev/null 2>&1; if [ -s $f ]; then echo png; cat $f; fi; rm -f $f; fi" :
@@ -180,10 +314,15 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
         @"t=$(wl-paste -l 2>/dev/null); "
          "if printf '%s\\n' \"$t\" | grep -q '^text/plain'; then echo text; wl-paste -n -t text 2>/dev/null; "
          "elif printf '%s\\n' \"$t\" | grep -qx 'image/png'; then echo png; wl-paste -t image/png 2>/dev/null; fi"];
+    NSString* command = [NSString stringWithFormat:@"%@%@%@", s_Linux ? [k_Wayland stringByAppendingString:k_LinuxListFiles] : k_MacListFiles, k_SendFilesOr, rest];
     dispatch_async(s_Queue, ^{
-        NSData* got = remote(command, nil, CLIPBOARD_MAX_PICTURE + 8, CLIPBOARD_SECONDS(CLIPBOARD_MAX_PICTURE));
+        NSData* got = remote(command, nil, CLIPBOARD_MAX_FILES + (1 << 20), CLIPBOARD_SECONDS(CLIPBOARD_MAX_FILES));
         NSString* text = nil;
         NSData* picture = nil;
+        if (got.length > 6 && memcmp(got.bytes, "files\n", 6) == 0) {
+            [self received:[got subdataWithRange:NSMakeRange(6, got.length - 6)] turn:turn count:count];
+            return;
+        }
         if (got.length > 5 && memcmp(got.bytes, "text\n", 5) == 0 && got.length - 5 <= CLIPBOARD_MAX_BYTES) {
             text = [[[NSString alloc] initWithData:[got subdataWithRange:NSMakeRange(5, got.length - 5)] encoding:NSUTF8StringEncoding] autorelease];
         }
@@ -216,9 +355,68 @@ static NSString* const k_Wayland = @"export XDG_RUNTIME_DIR=/run/user/$(id -u); 
             s_Seen = board.changeCount;
             [s_Both release];
             [s_BothPicture release];
+            [s_BothFiles release];
             s_Both = [text copy];
             s_BothPicture = [picture copy];
+            s_BothFiles = nil;
         });
+    });
+}
+
+// Files have come (not on the main thread): unpacked into a folder of their
+// own in the app's caches, and put on the clipboard from there. The folder
+// holds one clipboard's worth; the one before goes.
+- (void)received:(NSData*)archive turn:(NSInteger)turn count:(NSInteger)count
+{
+    NSFileManager* manager = NSFileManager.defaultManager;
+    NSURL* caches = [[manager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject
+                     URLByAppendingPathComponent:NSBundle.mainBundle.bundleIdentifier ?: @"dev.eduwass.moonlight-next"];
+    // One folder per device: two streams must not empty each other's.
+    NSString* device = getenv("MOONLIGHT_DEVICE") != nullptr ? @(getenv("MOONLIGHT_DEVICE")) : @"stream";
+    NSURL* fresh = [caches URLByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-%@.new", device]];
+    NSURL* folder = [caches URLByAppendingPathComponent:[NSString stringWithFormat:@"clipboard-%@", device]];
+    [manager removeItemAtURL:fresh error:nil];
+    if (![manager createDirectoryAtURL:fresh withIntermediateDirectories:YES attributes:nil error:nil] || tar(nil, archive, fresh.path) == nil) {
+        [manager removeItemAtURL:fresh error:nil];
+        return;
+    }
+    // Only plain files, at the top: whatever else an archive may hold is not offered for pasting.
+    NSMutableArray<NSString*>* names = [NSMutableArray array];
+    for (NSString* name in [manager contentsOfDirectoryAtPath:fresh.path error:nil]) {
+        NSDictionary* about = [manager attributesOfItemAtPath:[fresh.path stringByAppendingPathComponent:name] error:nil];
+        if ([about.fileType isEqualToString:NSFileTypeRegular]) {
+            [names addObject:name];
+        }
+    }
+    NSMutableArray<NSURL*>* arrived = [NSMutableArray array];
+    for (NSString* name in names) {
+        [arrived addObject:[fresh URLByAppendingPathComponent:name]];
+    }
+    NSString* key = filesKey(arrived);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSPasteboard* board = NSPasteboard.generalPasteboard;
+        if (names.count == 0 || turn != s_Turn || board.changeCount != count || [key isEqualToString:s_BothFiles]) {
+            [manager removeItemAtURL:fresh error:nil];
+            return;
+        }
+        [manager removeItemAtURL:folder error:nil];
+        if (![manager moveItemAtURL:fresh toURL:folder error:nil]) {
+            return;
+        }
+        NSMutableArray<NSURL*>* files = [NSMutableArray array];
+        for (NSString* name in names) {
+            [files addObject:[folder URLByAppendingPathComponent:name]];
+        }
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Clipboard: %lu files, %lu bytes received", (unsigned long)files.count, (unsigned long)archive.length);
+        [board clearContents];
+        [board writeObjects:files];
+        s_Seen = board.changeCount;
+        [s_Both release];
+        [s_BothPicture release];
+        [s_BothFiles release];
+        s_Both = nil;
+        s_BothPicture = nil;
+        s_BothFiles = [key copy];
     });
 }
 @end
