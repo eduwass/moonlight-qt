@@ -202,19 +202,13 @@ static int listenForCursors(void*)
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Cursor shapes: connected from %s", from);
         // From here the host leaves its cursor out of the picture, and ours
         // is the one to see; when the helper goes, the other way round.
+        // (mouse.cpp shows and hides the pointer, at its next movement: it
+        // knows where the pointer is and what the user has asked for.)
         SDL_AtomicSet(&s_Connected, 1);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            SDL_ShowCursor(SDL_ENABLE);
-        });
         @autoreleasepool {
             serve(fd);
         }
         SDL_AtomicSet(&s_Connected, 0);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (cursorShareWaiting()) {
-                SDL_ShowCursor(SDL_DISABLE);
-            }
-        });
     }
 }
 

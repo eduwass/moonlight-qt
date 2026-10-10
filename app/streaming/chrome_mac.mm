@@ -763,6 +763,16 @@ static ChromeWarm* s_Warm;
 // behind other windows, on another Space (macOS says so: occlusionState).
 static std::atomic<bool> s_Unseen, s_Covered;
 
+static std::atomic<bool> s_Connection;
+
+void chromeConnection(bool up)
+{
+    s_Connection = up;
+    if (!up && s_Warm != nil) {
+        [NSObject cancelPreviousPerformRequestsWithTarget:s_Warm selector:@selector(fresh) object:nil];
+    }
+}
+
 bool chromeUnseen()
 {
     return s_Unseen || s_Covered;
@@ -880,8 +890,9 @@ bool chromeUnseen()
         if (covered != s_Covered) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, covered ? "The window is out of sight: frames are not drawn" : "The window is in sight again");
         }
+        bool back = s_Covered && !covered;
         s_Covered = covered;
-        if (!covered) {
+        if (back) {
             [self fresh];
         }
     }
@@ -899,7 +910,9 @@ bool chromeUnseen()
     // has changed), and a whole picture is a large frame for the host to make.
     static NSTimeInterval last;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-    if ([self live] && !hidden && now - last >= 0.5) {
+    // And only of a connection that is there: during a restart in place the
+    // old one is taken down, and asking it then touches what is already gone.
+    if ([self live] && !hidden && s_Connection && now - last >= 0.5) {
         last = now;
         LiRequestIdrFrame();
     }
@@ -1083,6 +1096,7 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     }
     [s_Warm rest]; // whatever the last session left: its timer, its hold on App Nap
     s_Covered = false;
+    s_Connection = true; // a session's window is made once its connection is up
     [s_Warm->startedAt release];
     s_Warm->startedAt = [[NSDate date] retain];
     s_Warm->hidden = false;

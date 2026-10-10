@@ -1,3 +1,6 @@
+#include <sys/file.h>
+#include <fcntl.h>
+#include <unistd.h>
 // Fork-only (eduwass/moonlight-qt): the window the app opens when it is started
 // by itself. The machines to connect to on the left; on the right the one
 // selected: a picture of what is on its screen, whether it answers, and how it
@@ -678,9 +681,23 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 
 - (void)passedOn:(NSNotification*)note
 {
-    if ([note.object isKindOfClass:[NSString class]]) {
-        managerOpenUrl([note.object UTF8String]);
+    if (![note.object isKindOfClass:[NSString class]]) {
+        return;
     }
+    // Got it, the sender may stop saying it. It may have said it twice before
+    // this reached it: the same link again within three seconds is that.
+    [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.opened" object:note.object
+                                                                userInfo:nil deliverImmediately:YES];
+    static NSString* last;
+    static NSTimeInterval lastAt;
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if ([note.object isEqualToString:last] && now - lastAt < 3) {
+        return;
+    }
+    [last release];
+    last = [note.object copy];
+    lastAt = now;
+    managerOpenUrl([note.object UTF8String]);
 }
 
 - (void)streamUp:(NSNotification*)note
@@ -1245,24 +1262,77 @@ static NSMutableDictionary* plainEnvironment()
     return all;
 }
 
+// The process with the app's own window holds this lock for as long as it
+// runs. That is how another process knows there is one (and that it need not
+// start one), also while that one is still starting and not yet listening.
+static int managerLock()
+{
+    NSString* path = [[pictureFile(@"x") URLByDeletingLastPathComponent].path stringByAppendingPathComponent:@"manager.lock"];
+    int fd = open(path.fileSystemRepresentation, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+    if (fd >= 0 && flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        close(fd);
+        fd = -1;
+    }
+    return fd;
+}
+
+// Passes a link to the process that holds the lock: said again every half
+// second until it answers that it has it (it may still be starting), for
+// five seconds at most.
+@interface LinkPasser : NSObject {
+@public
+    NSString* link;
+    int tries;
+    bool thenQuit;
+}
+@end
+
+@implementation LinkPasser
+- (void)say
+{
+    if (tries++ >= 10) {
+        NSLog(@"MoonlightNext: nobody took the link %@", link);
+        [self done:nil];
+        return;
+    }
+    [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.open" object:link
+                                                                userInfo:nil deliverImmediately:YES];
+    [self performSelector:@selector(say) withObject:nil afterDelay:0.5];
+}
+- (void)done:(NSNotification*)note
+{
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(say) object:nil];
+    [NSDistributedNotificationCenter.defaultCenter removeObserver:self];
+    if (thenQuit) {
+        exit(0);
+    }
+    [link release];
+    [self autorelease];
+}
+@end
+
+static void passLink(NSString* link, bool thenQuit)
+{
+    LinkPasser* passer = [[LinkPasser alloc] init]; // lets go of itself in done:
+    passer->link = [link copy];
+    passer->thenQuit = thenQuit;
+    [NSDistributedNotificationCenter.defaultCenter addObserver:passer selector:@selector(done:) name:@"dev.eduwass.moonlight-next.opened" object:link
+                                            suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
+    [passer say];
+}
+
 void managerForwardUrl(const char* url)
 {
     NSString* link = @(url);
-    // Is there a process with the app's own window? It is the one started with no arguments.
-    NSTask* look = [[[NSTask alloc] init] autorelease];
-    look.executableURL = [NSURL fileURLWithPath:@"/usr/bin/pgrep"];
-    look.arguments = @[@"-f", [NSString stringWithFormat:@"^%@$", [NSRegularExpression escapedPatternForString:NSBundle.mainBundle.executablePath]]];
-    look.standardOutput = [NSFileHandle fileHandleWithNullDevice];
-    bool there = [look launchAndReturnError:nil];
-    if (there) {
-        [look waitUntilExit];
-        there = look.terminationStatus == 0;
-    }
-    if (there) {
-        [NSDistributedNotificationCenter.defaultCenter postNotificationName:@"dev.eduwass.moonlight-next.open" object:link
-                                                                    userInfo:nil deliverImmediately:YES];
+    int fd = managerLock();
+    if (fd < 0) {
+        passLink(link, false); // there is one
         return;
     }
+    // There is none: start one, with the link. (Two streams doing this at
+    // once start two; the second finds the lock taken, passes its link on to
+    // the first and goes: see managerStart.)
+    close(fd);
     NSWorkspaceOpenConfiguration* configuration = [NSWorkspaceOpenConfiguration configuration];
     configuration.createsNewApplicationInstance = YES;
     NSMutableDictionary* environment = plainEnvironment();
@@ -1273,6 +1343,14 @@ void managerForwardUrl(const char* url)
 
 void managerStart()
 {
+    // Started for a link while another process already has the app's window:
+    // the link is that one's, and this process is not needed.
+    static int lock = -1;
+    lock = managerLock();
+    if (lock < 0 && getenv("MOONLIGHT_OPEN_URL") != nullptr) {
+        passLink(@(getenv("MOONLIGHT_OPEN_URL")), true);
+        return;
+    }
     s_StartedAt = [[NSDate date] retain];
     loadDevices();
     s_Manager = [[ManagerController alloc] init];

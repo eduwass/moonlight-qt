@@ -557,6 +557,7 @@ bool Session::dynresTick()
     m_VideoDecoder = nullptr;
     SDL_UnlockMutex(m_DecoderLock);
 
+    chromeConnection(false);
     LiStopConnection();
 
     try {
@@ -590,6 +591,8 @@ bool Session::dynresTick()
         setWake(false);
         return false;
     }
+
+    chromeConnection(true);
 
     // The calls above block for seconds; the cover's time limit is for what
     // comes after them.

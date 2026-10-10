@@ -166,9 +166,16 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
             LiSendMousePositionEvent((short)x, (short)y, dst.w, dst.h);
         }
 
-        // Adjust the cursor visibility if applicable
+        // Adjust the cursor visibility if applicable. Fork: also when the
+        // host's cursor helper has come or gone since the last look (see
+        // cursorShareWaiting): whose cursor is to be seen has changed then.
+        static bool wasWaiting;
+        bool waiting = cursorShareWaiting();
+        if ((mouseInVideoRegion ^ m_MouseWasInVideoRegion) || waiting != wasWaiting) {
+            SDL_ShowCursor((mouseInVideoRegion && (m_MouseCursorCapturedVisibilityState == SDL_DISABLE || waiting)) ? SDL_DISABLE : SDL_ENABLE);
+        }
+        wasWaiting = waiting;
         if (mouseInVideoRegion ^ m_MouseWasInVideoRegion) {
-            SDL_ShowCursor((mouseInVideoRegion && (m_MouseCursorCapturedVisibilityState == SDL_DISABLE || cursorShareWaiting())) ? SDL_DISABLE : SDL_ENABLE);
             if (!mouseInVideoRegion && buttonState != 0) {
                 // If we still have a button pressed on leave, wait for that to come up
                 // before we stop sending mouse position events.
