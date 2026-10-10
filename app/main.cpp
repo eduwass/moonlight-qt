@@ -21,6 +21,7 @@
 #include <sys/socket.h>
 #include <signal.h>
 #include <unistd.h>
+#include <fcntl.h>
 #endif
 
 // Don't let SDL hook our main function, since Qt is already
@@ -542,6 +543,19 @@ private:
                         argv.append(argument.data());
                     }
                     argv.append(nullptr);
+                    // Nothing this process had open goes along: a port listened
+                    // on (the pointer's shapes) would be held by nobody and
+                    // could not be opened again, and a helper at the other
+                    // end of a pipe would never see it close.
+                    // (Marked to close as the process is replaced, not closed
+                    // here: some belong to the system, which ends a process
+                    // that closes them.)
+                    for (int fd = 3; fd < getdtablesize(); fd++) {
+                        int flags = fcntl(fd, F_GETFD);
+                        if (flags != -1) {
+                            fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+                        }
+                    }
                     execv(QCoreApplication::applicationFilePath().toLocal8Bit().constData(), argv.data());
                     if (!m_Error.isEmpty()) {
                         managerAlert(m_Error.toUtf8().constData()); // still here: it could not be done

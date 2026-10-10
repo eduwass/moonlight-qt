@@ -583,8 +583,13 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     device[@"system"] = system.indexOfSelectedItem == 1 ? @"linux" : @"mac";
     device[@"fixed"] = @(fixed);
     if (sized && fixed == wasFixed && width.integerValue >= 320 && height.integerValue >= 200 && width.integerValue <= 8192 && height.integerValue <= 8192) {
-        device[fixed ? @"width" : @"windowWidth"] = @(width.integerValue);
-        device[fixed ? @"height" : @"windowHeight"] = @(height.integerValue);
+        // (Of a window, the one that was typed: the other is as the stream left it.)
+        if (fixed || sender == width) {
+            device[fixed ? @"width" : @"windowWidth"] = @(width.integerValue);
+        }
+        if (fixed || sender == height) {
+            device[fixed ? @"height" : @"windowHeight"] = @(height.integerValue);
+        }
     }
     // The window's place goes with the device under its new name, and its size is the one typed here.
     {
@@ -624,7 +629,19 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 - (void)add:(id)sender
 {
     [window makeFirstResponder:nil]; // what is being typed belongs to the device it was typed for
-    [s_Devices addObject:[[@{@"name": @"New device", @"address": @"", @"system": @"mac", @"windowWidth": @1920, @"windowHeight": @1080, @"truePixels": @YES} mutableCopy] autorelease]];
+    // A name no other device has: a device is found by it.
+    NSString* fresh = @"New device";
+    for (int n = 2; ; n++) {
+        bool taken = false;
+        for (NSDictionary* each in s_Devices) {
+            taken |= each[@"name"] != nil && [each[@"name"] caseInsensitiveCompare:fresh] == NSOrderedSame;
+        }
+        if (!taken) {
+            break;
+        }
+        fresh = [NSString stringWithFormat:@"New device %d", n];
+    }
+    [s_Devices addObject:[[@{@"name": fresh, @"address": @"", @"system": @"mac", @"windowWidth": @1920, @"windowHeight": @1080, @"truePixels": @YES} mutableCopy] autorelease]];
     saveDevices();
     [table reloadData];
     [table selectRowIndexes:[NSIndexSet indexSetWithIndex:s_Devices.count - 1] byExtendingSelection:NO];
