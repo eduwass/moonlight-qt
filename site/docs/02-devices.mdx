@@ -51,7 +51,7 @@ Changes are saved as you make them and hold from the next Connect.
 | **Bitrate** | In kbps. Empty lets the app choose by the stream's size. |
 | **Screenshot** | The command for the picture, above. |
 | **Before connecting** | A shell command run on your Mac before every Connect, to wake or unlock the machine. If the last line it prints is an address, the stream goes there instead of to **Address**. It is run with `MOONLIGHT_POINTER` set to 1 or 0: whether **Instant pointer** is on. |
-| **Clipboard** | An ssh destination for the machine (`me@my-pc`, or a name from your ssh config). With it, the two machines share a clipboard: see below. With a Mac it is also a second way for the instant pointer's cursor shapes to arrive, when macOS on that Mac does not let its helper reach yours. |
+| **Clipboard** | An ssh destination for the machine (`me@my-pc`, or a name from your ssh config). With it, the two machines share a clipboard: see below. With a Mac it is also how the instant pointer's cursor shapes arrive: over ssh, and not by that Mac's helper connecting to yours, which macOS there may refuse. |
 
 ## Connect
 

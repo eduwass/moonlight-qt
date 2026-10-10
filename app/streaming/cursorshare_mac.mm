@@ -20,6 +20,8 @@
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -32,8 +34,8 @@ static char s_Host[64]; // the host we stream from; only it may set our cursor
 static void* s_Cursor;  // an SDL 3 cursor; main thread only
 static SDL_atomic_t s_Listening;
 static SDL_atomic_t s_Connected; // how many connections of the host's helper are being listened to (one, but for a moment)
-static SDL_atomic_t s_Serving;   // its connection, to let go of when a newer one comes
-static SDL_atomic_t s_OverSsh;   // the helper is being read over ssh instead (fetchOverSsh)
+static int s_Serving;            // its connection, to let go of when a newer one comes; under s_ServingLock
+static pthread_mutex_t s_ServingLock = PTHREAD_MUTEX_INITIALIZER;
 static bool s_Plain;             // a host with no helper: a plain arrow, and nothing to wait for
 
 // ponytail: the SDL 2 we link is sdl2-compat, a layer over SDL 3, and the SDL 2
@@ -199,13 +201,18 @@ static int listenForCursors(void*)
         }
         char from[INET_ADDRSTRLEN] = "";
         inet_ntop(AF_INET, &peer.sin_addr, from, sizeof(from));
-        // Not from anyone but the host, and not while the helper is on the
-        // line over ssh: two of them would each tell the host when they go,
-        // and its cursor would be back in the picture with one still here.
-        if (strcmp(from, s_Host) != 0 || SDL_AtomicGet(&s_OverSsh) != 0) {
+        if (strcmp(from, s_Host) != 0) {
             close(fd);
             continue;
         }
+        // A host that vanishes without a word (its cable pulled) is noticed
+        // in twenty seconds; a cursor that has not changed for an hour is not
+        // taken for one.
+        int on = 1, idle = 10, between = 3, tries = 3;
+        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle));
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &between, sizeof(between));
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &tries, sizeof(tries));
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Cursor shapes: connected from %s", from);
         // From here the host leaves its cursor out of the picture, and ours
         // is the one to see; when the helper goes, the other way round.
@@ -214,10 +221,14 @@ static int listenForCursors(void*)
         // The newest connection is the helper: an older one is let go of, so
         // that one whose end was never heard of (seen: the host's side closed
         // and this side still open) cannot keep the next helper waiting.
-        int previous = SDL_AtomicSet(&s_Serving, fd);
-        if (previous > 0) {
-            shutdown(previous, SHUT_RDWR);
+        // (Under one lock with the closing below: a descriptor's number is
+        // only this connection's until it is closed.)
+        pthread_mutex_lock(&s_ServingLock);
+        if (s_Serving > 0) {
+            shutdown(s_Serving, SHUT_RDWR);
         }
+        s_Serving = fd;
+        pthread_mutex_unlock(&s_ServingLock);
         SDL_AtomicAdd(&s_Connected, 1);
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             FILE* in = fdopen(fd, "r");
@@ -226,15 +237,17 @@ static int listenForCursors(void*)
                     serve(in);
                 }
             }
-            // No longer the one to let go of, and only then closed: its
-            // number may be the next connection's.
-            SDL_AtomicCAS(&s_Serving, fd, 0);
+            pthread_mutex_lock(&s_ServingLock);
+            if (s_Serving == fd) {
+                s_Serving = 0;
+            }
             if (in != nullptr) {
                 fclose(in);
             }
             else {
                 close(fd);
             }
+            pthread_mutex_unlock(&s_ServingLock);
             SDL_AtomicAdd(&s_Connected, -1);
         });
     }
@@ -244,23 +257,23 @@ static int listenForCursors(void*)
 // For a host where macOS does not let the helper reach this Mac (it asks
 // whether "sunshine" may find devices on the local network, again after every
 // re-signed build, and "Don't Allow" fails without a word); what ssh starts
-// is not asked. Tried for as long as the app runs, while the helper has not
-// come by itself. MOONLIGHT_CLIPBOARD names the ssh destination.
+// is not asked. MOONLIGHT_CLIPBOARD names the ssh destination, and with one
+// this is the only way used: the two together would be two helpers on the
+// host, each telling it when it comes and goes, and its cursor in or out of
+// the picture by whichever spoke last. Tried again for as long as the app runs.
 static int fetchOverSsh(void* destination)
 {
     NSString* host = (NSString*)destination; // kept for good
     for (;;) {
-        sleep(1); // the helper's own connection first, if it can: it dials within a second of the launch
-        if (SDL_AtomicGet(&s_Serving) != 0 || s_Plain) {
-            continue;
-        }
+        sleep(1);
         @autoreleasepool {
             NSTask* task = [[[NSTask alloc] init] autorelease];
             task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/ssh"];
             task.arguments = @[@"-o", @"BatchMode=yes", @"-o", @"ConnectTimeout=4", @"-o", @"ServerAliveInterval=2", @"-o", @"ServerAliveCountMax=2",
                                @"-o", @"ControlMaster=auto", @"-o", [NSString stringWithFormat:@"ControlPath=%@/.ssh/cm-%%C", NSHomeDirectory()],
                                @"-o", @"ControlPersist=600", @"--", host,
-                               @"p=$(pgrep -x sunshine | head -1); [ -n \"$p\" ] && exec ~/.local/bin/cursor-share --stdio $p"];
+                               // Exactly one Sunshine, or none of this: the helper would tell the wrong one.
+                               @"p=$(pgrep -x sunshine); case \"$p\" in ''|*[!0-9]*) exit 1;; esac; exec ~/.local/bin/cursor-share --stdio $p"];
             NSPipe* out = [NSPipe pipe];
             task.standardOutput = out;
             // Its input is held open and never written to: that being closed
@@ -272,17 +285,19 @@ static int fetchOverSsh(void* destination)
             if (![task launchAndReturnError:nil]) {
                 continue;
             }
-            SDL_AtomicSet(&s_OverSsh, 1);
-            FILE* in = fdopen(dup(out.fileHandleForReading.fileDescriptor), "r");
+            int copy = dup(out.fileHandleForReading.fileDescriptor);
+            FILE* in = copy >= 0 ? fdopen(copy, "r") : nullptr;
             bool counted = false;
             if (in != nullptr) {
                 serve(in, &counted);
                 fclose(in);
             }
+            else if (copy >= 0) {
+                close(copy);
+            }
             if (counted) {
                 SDL_AtomicAdd(&s_Connected, -1);
             }
-            SDL_AtomicSet(&s_OverSsh, 0);
             [hold.fileHandleForWriting closeFile]; // the helper sees its input closed and goes
             [task terminate];
             [task waitUntilExit];
@@ -305,15 +320,18 @@ void cursorShareStart(const char* host)
     SDL_strlcpy(s_Host, host, sizeof(s_Host));
     // SDL destroyed the last session's cursors when it shut its video down.
     s_Cursor = nullptr;
-    if (SDL_AtomicCAS(&s_Listening, 0, 1)) {
-        SDL_DetachThread(SDL_CreateThread(listenForCursors, "cursor shapes", nullptr));
-    }
-    static bool fetching;
     const char* destination = getenv("MOONLIGHT_CLIPBOARD");
     NSCharacterSet* other = [[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_@"] invertedSet];
-    if (!fetching && !s_Plain && destination != nullptr && destination[0] != 0 && destination[0] != '-' && strlen(destination) <= 128 &&
-            [@(destination) rangeOfCharacterFromSet:other].location == NSNotFound) {
-        fetching = true;
-        SDL_DetachThread(SDL_CreateThread(fetchOverSsh, "cursor shapes over ssh", [@(destination) retain]));
+    bool overSsh = !s_Plain && destination != nullptr && destination[0] != 0 && destination[0] != '-' && strlen(destination) <= 128 &&
+                   [@(destination) rangeOfCharacterFromSet:other].location == NSNotFound;
+    // One way or the other, for the life of the app: over ssh where the device
+    // has a destination for it, else the helper's own connection to us.
+    if (SDL_AtomicCAS(&s_Listening, 0, 1)) {
+        if (overSsh) {
+            SDL_DetachThread(SDL_CreateThread(fetchOverSsh, "cursor shapes over ssh", [@(destination) retain]));
+        }
+        else if (!s_Plain) {
+            SDL_DetachThread(SDL_CreateThread(listenForCursors, "cursor shapes", nullptr));
+        }
     }
 }
