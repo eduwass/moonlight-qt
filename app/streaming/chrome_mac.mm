@@ -563,7 +563,7 @@ static void fillTip(ChromeButton* button, std::vector<TipLine>& lines)
         switchTip(lines, @"Title bar",
                   keyboard ? (s_Titled ? @"On. Space turns it off." : @"Off. Space turns it on.")
                   : s_Titled ? @"On. The window has a title bar of its own, and nothing is over the picture. Click for the bar that drops over it."
-                  : @"Off. The picture fills the window. Click for a title bar, with these switches in it.", nil);
+                  : @"Off. The picture fills the window. Click for a title bar, with these switches in it.", shortcut(KEY_STYLE));
     }
     else if (button == s_Bar->gear) {
         lines.push_back({@"Settings", nil, nil, NSFontWeightSemibold, 0xF2F2F4FF, 0, false, 0});
@@ -737,6 +737,9 @@ static bool chromeTakes(int key, bool down, int sdlMods)
         }
         else if (which == KEY_INFO) {
             setFocus(s_Focus == 0 ? -1 : 0);
+        }
+        else if (which == KEY_STYLE) {
+            toggleStyle();
         }
         else if (s_Action != nullptr) {
             static const int actions[] = {0, 0, CHROME_STATS, CHROME_TRUE_PIXELS, CHROME_FOLLOW, CHROME_FULLSCREEN};

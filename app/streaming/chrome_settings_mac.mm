@@ -11,10 +11,11 @@
 static const ChromeBinding k_Defaults[KEY_COUNT] = {
     {'b', MOD_CTRL | MOD_ALT | MOD_SHIFT}, {'i', MOD_CTRL | MOD_ALT | MOD_SHIFT}, {'s', MOD_CTRL | MOD_ALT | MOD_SHIFT},
     {'t', MOD_CTRL | MOD_ALT | MOD_SHIFT}, {'f', MOD_CTRL | MOD_ALT | MOD_SHIFT}, {'x', MOD_CTRL | MOD_ALT | MOD_SHIFT},
+    {'w', MOD_CTRL | MOD_ALT | MOD_SHIFT},
 };
-static NSString* const k_Names[KEY_COUNT] = {@"Show the bar", @"Connection info", @"Stats", @"True Pixels", @"Follow size", @"Fullscreen"};
+static NSString* const k_Names[KEY_COUNT] = {@"Show the bar", @"Connection info", @"Stats", @"True Pixels", @"Follow size", @"Fullscreen", @"Title bar"};
 static NSString* const k_Symbols[KEY_COUNT] = {@"menubar.rectangle", @"bolt.fill", @"chart.bar.fill", @"square.grid.2x2.fill",
-                                               @"arrow.up.right.square", @"arrow.down.left.and.arrow.up.right"};
+                                               @"arrow.up.right.square", @"arrow.down.left.and.arrow.up.right", @"macwindow"};
 static NSString* const k_Saved = @"ChromeKeys";
 
 static ChromeBinding s_Bindings[KEY_COUNT];
@@ -32,7 +33,8 @@ static void load()
     loadedAt = now;
     memcpy(s_Bindings, k_Defaults, sizeof(s_Bindings));
     NSArray* saved = [NSUserDefaults.standardUserDefaults arrayForKey:k_Saved];
-    for (NSUInteger i = 0; saved.count == KEY_COUNT * 2 && i < KEY_COUNT; i++) {
+    // (Fewer than there are now, from before one was added: those are kept, and the new one has its own.)
+    for (NSUInteger i = 0; saved.count % 2 == 0 && i < KEY_COUNT && i * 2 + 1 < saved.count; i++) {
         s_Bindings[i] = {[saved[i * 2] intValue], [saved[i * 2 + 1] intValue]};
     }
 }
@@ -314,7 +316,7 @@ static NSString* const k_PaneSymbols[PANE_COUNT] = {@"gearshape", @"dial.medium"
     if (pane != PANE_KEYS) {
         return;
     }
-    NSRect card = NSMakeRect(236.5, 52.5, 481, 6 * 44 + 1);
+    NSRect card = NSMakeRect(236.5, 52.5, 481, KEY_COUNT * 44 + 1);
     NSBezierPath* shape = [NSBezierPath bezierPathWithRoundedRect:card xRadius:8 yRadius:8];
     [rgba(0x343237FF) setFill];
     [shape fill];
@@ -331,7 +333,7 @@ static NSString* const k_PaneSymbols[PANE_COUNT] = {@"gearshape", @"dial.medium"
     }
 
     [@"Click a shortcut, then press the new keys. Each action has its own full shortcut. A bound shortcut is taken by Moonlight; the other machine never sees it."
-        drawWithRect:NSMakeRect(240, 334, 330, 60) options:NSStringDrawingUsesLineFragmentOrigin attributes:text(11, NSFontWeightRegular, 0xA3A1A8FF)];
+        drawWithRect:NSMakeRect(240, 70 + KEY_COUNT * 44, 330, 60) options:NSStringDrawingUsesLineFragmentOrigin attributes:text(11, NSFontWeightRegular, 0xA3A1A8FF)];
 }
 @end
 
@@ -373,7 +375,7 @@ void chromeSettingsOpen(const char* host)
         restore.controlSize = NSControlSizeSmall;
         restore.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
         [restore sizeToFit];
-        [restore setFrameOrigin:NSMakePoint(718 - restore.frame.size.width, 332)];
+        [restore setFrameOrigin:NSMakePoint(718 - restore.frame.size.width, 68 + KEY_COUNT * 44)];
         [view addSubview:restore];
         [view->keyViews addObject:restore];
         [view choose:PANE_GENERAL];

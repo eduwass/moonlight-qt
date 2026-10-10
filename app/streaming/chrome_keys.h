@@ -5,7 +5,7 @@
 
 #import <Cocoa/Cocoa.h>
 
-enum { KEY_BAR, KEY_INFO, KEY_STATS, KEY_TRUE_PIXELS, KEY_FOLLOW, KEY_FULLSCREEN, KEY_COUNT };
+enum { KEY_BAR, KEY_INFO, KEY_STATS, KEY_TRUE_PIXELS, KEY_FOLLOW, KEY_FULLSCREEN, KEY_STYLE, KEY_COUNT };
 enum { MOD_CTRL = 1, MOD_ALT = 2, MOD_SHIFT = 4, MOD_CMD = 8 };
 
 // key is the SDL key code, which for anything printable is the character
