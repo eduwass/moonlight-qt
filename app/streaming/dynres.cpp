@@ -114,6 +114,7 @@ static Uint32 s_CoverAt, s_PacketsAt;
 
 // Waiting for a new connection's first video packets.
 static bool s_Await, s_Retry;
+static bool s_Restarts;        // this stream may be connected again in place: see where it is set
 static bool s_Again;           // connect again at the same size: the sound output can be opened now
 static Uint32 s_AwaitAt;
 static int s_Retries;
@@ -286,7 +287,13 @@ bool Session::dynresTick()
         s_Cover = COVER_OFF;
         s_SeenWidth = s_SeenHeight = 0;
         s_Changed = s_Sized = s_Retry = s_Again = false;
-        s_Await = true;
+        // Connecting again starts the app on the host again, which is nothing
+        // to a desktop and the end of a game: only a device's stream (the
+        // device window's, always the desktop) or one of the app called
+        // Desktop is ever restarted. Anything else, started from Moonlight's
+        // own window, keeps the size and the connection it was given.
+        s_Restarts = qEnvironmentVariableIsSet("MOONLIGHT_DEVICE") || m_App.name.compare("Desktop", Qt::CaseInsensitive) == 0;
+        s_Await = s_Restarts;
         s_AwaitAt = 0;
         s_Retries = 0;
         setWake(false);
@@ -301,7 +308,7 @@ bool Session::dynresTick()
         // MOONLIGHT_FOLLOW=0 starts with Follow size off: the stream keeps the
         // size it was asked for, whatever the window's (for measuring a size
         // the screen at hand cannot show; the bar's switch turns it back on).
-        s_Follow = qEnvironmentVariable("MOONLIGHT_FOLLOW") != "0";
+        s_Follow = s_Restarts && qEnvironmentVariable("MOONLIGHT_FOLLOW") != "0";
         if (s_Chrome) {
             SDL_strlcpy(s_Host, m_Computer->name.toUtf8().constData(), sizeof(s_Host));
             dynresChromeless(m_Window, 2);
@@ -486,6 +493,9 @@ bool Session::dynresTick()
         }
     }
 
+    if (s_Again && !s_Restarts) {
+        s_Again = false;
+    }
     if (s_Again) {
         s_Again = false;
         s_Retry = false; // this is that one too
@@ -502,7 +512,7 @@ bool Session::dynresTick()
                     DYNRES_NO_VIDEO_MS, s_Retries, DYNRES_MAX_RETRIES);
     }
     else {
-        if ((flags & SDL_WINDOW_MINIMIZED) || (!s_Follow && !s_ResizeOnce)) {
+        if ((flags & SDL_WINDOW_MINIMIZED) || !s_Restarts || (!s_Follow && !s_ResizeOnce)) {
             // Whatever was settling is moot: the window is away, or the stream
             // has been told to keep its size.
             s_Changed = false;
