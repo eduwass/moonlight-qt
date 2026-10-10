@@ -497,6 +497,7 @@ static Diagnosis examine(NSDictionary* device)
 
 @interface GeneralPane : NSView {
     NSPopUpButton* warm;
+    NSButton* titleBar;
 }
 @end
 
@@ -505,10 +506,12 @@ static Diagnosis examine(NSDictionary* device)
 - (void)changed:(id)sender
 {
     [NSUserDefaults.standardUserDefaults setInteger:warm.selectedItem.tag forKey:@"WarmSeconds"];
+    [NSUserDefaults.standardUserDefaults setBool:titleBar.state == NSControlStateValueOn forKey:@"TitleBar"];
 }
 - (void)refresh
 {
     [warm selectItemWithTag:[NSUserDefaults.standardUserDefaults integerForKey:@"WarmSeconds"]];
+    titleBar.state = [NSUserDefaults.standardUserDefaults boolForKey:@"TitleBar"] ? NSControlStateValueOn : NSControlStateValueOff;
 }
 - (instancetype)initWithFrame:(NSRect)frame
 {
@@ -523,10 +526,15 @@ static Diagnosis examine(NSDictionary* device)
     [warm selectItemWithTag:[NSUserDefaults.standardUserDefaults integerForKey:@"WarmSeconds"]];
     warm.target = self;
     warm.action = @selector(changed:);
+    titleBar = [NSButton checkboxWithTitle:@"A title bar of its own, with the switches in it" target:self action:@selector(changed:)];
+    titleBar.state = [NSUserDefaults.standardUserDefaults boolForKey:@"TitleBar"] ? NSControlStateValueOn : NSControlStateValueOff;
     NSGridView* grid = [NSGridView gridViewWithViews:@[
         @[caption(@"Closing a stream's window"), warm],
         @[caption(@""), note(@"A warm stream goes on out of sight, so its window is back at once: Connect in the device window, a link, or the Dock. "
                               "The device keeps sending picture all that time. End Stream in the device window, or ⌃⌥⇧Q in the stream, ends it for good.")],
+        @[caption(@"A stream's window"), titleBar],
+        @[caption(@""), note(@"Off, the picture fills the window and the bar drops over its top edge. On, nothing is ever over the picture. "
+                              "Fullscreen has the bar that drops either way. The bar's own switch does the same; a stream that is open takes this up the next time it is opened.")],
         // Which build this is: the fork's commit, as the build script wrote it into the bundle.
         @[caption(@"Build"), note([NSBundle.mainBundle objectForInfoDictionaryKey:@"MoonlightNextBuild"] ?: @"not recorded")],
     ]];

@@ -29,7 +29,7 @@ void clipboardShareStart(); // clipboard_mac.mm
 #include <set>
 #include <vector>
 
-#define BAR_WIDTH 330
+#define BAR_WIDTH 358
 #define BAR_HEIGHT 26
 #define TAB_WIDTH 56
 #define TAB_HEIGHT 10
@@ -48,6 +48,18 @@ static NSView* s_Content; // the window's content view; ours hang in it
 // control ringed, the arrows move the ring, Space acts, Esc gives the keyboard
 // back to the remote machine. s_Focus is -1 when the keyboard is not in it.
 static int s_Focus = -1;
+
+// The window's other style, for when it is not fullscreen: a title bar of its
+// own, as any window has, with the bar's switches at its right end, and
+// nothing over the picture. (Settings > General, or the bar's own switch.)
+// s_Titled: the bar is there now. In fullscreen it never is: a fullscreen
+// window has no title bar, and the bar drops over the picture as ever.
+#define TITLED_FROM 128  // the bar from here on is what the title bar shows: the switches, without the lights and the handle
+#define TITLED_WIDTH 188 // and this much of it: without the gear, which the menu bar has
+static bool s_Titled;
+static NSTitlebarAccessoryViewController* s_Accessory;
+static NSView* s_Handle;
+static void toggleStyle();
 
 static NSColor* rgba(uint32_t value)
 {
@@ -234,13 +246,16 @@ static void showTip(ChromeButton* button);
     if (action == -2) {
         chromeSettingsOpen(s_State.host);
     }
+    else if (action == -3) {
+        toggleStyle();
+    }
     else if (action >= 0 && !busy && s_Action != nullptr) {
         s_Action(action);
     }
 }
 - (void)drawRect:(NSRect)dirty
 {
-    bool lit = on && action >= 0;
+    bool lit = on && (action >= 0 || action == -3);
     [rgba(busy ? 0xFFFFFF8C : lit ? 0xFFFFFFD9 : hovered ? 0xFFFFFF29 : 0xFFFFFF14) setFill];
     [[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:6 yRadius:6] fill];
     if (hovered && !lit && !busy) {
@@ -325,6 +340,7 @@ static void showTip(ChromeButton* button);
     ChromeButton* truePixels;
     ChromeButton* follow;
     ChromeButton* fullscreen;
+    ChromeButton* style; // the window's style: this bar, or a title bar
     ChromeButton* gear;
     bool inside;
 }
@@ -346,6 +362,9 @@ static void showTip(ChromeButton* button);
     inside = true;
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(leave) object:nil];
     [self lights:YES];
+    if (s_Titled) {
+        showBar(true); // always in sight there; "shown" is then that someone is at it, and its numbers are kept fresh
+    }
 }
 - (void)mouseExited:(NSEvent*)event
 {
@@ -397,6 +416,17 @@ static void showTip(ChromeButton* button);
 - (NSView*)hitTest:(NSPoint)point { return nil; }
 - (void)drawRect:(NSRect)dirty
 {
+    static const CGFloat lefts[] = {134, 175, 203, 231, 259, 287, 328};
+    if (s_Titled) {
+        // In the title bar there is no bar to draw, only the keyboard's ring.
+        if (s_Focus >= 0) {
+            NSBezierPath* ring = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(NSMakeRect(lefts[s_Focus], 4, 24, 18), -1.25, -1.25) xRadius:7 yRadius:7];
+            ring.lineWidth = 1.5;
+            [rgba(0xFFFFFFFF) setStroke];
+            [ring stroke];
+        }
+        return;
+    }
     // Square at the top, where it meets the window's edge; round below.
     NSRect box = NSInsetRect(self.bounds, 0.5, 0);
     box.origin.y += 0.5;
@@ -411,11 +441,10 @@ static void showTip(ChromeButton* button);
     [rgba(0xFFFFFF24) setFill];
     NSRectFillUsingOperation(NSMakeRect(73, 6, 1, 14), NSCompositingOperationSourceOver);
     NSRectFillUsingOperation(NSMakeRect(166, 6, 1, 14), NSCompositingOperationSourceOver);
-    NSRectFillUsingOperation(NSMakeRect(291, 6, 1, 14), NSCompositingOperationSourceOver);
+    NSRectFillUsingOperation(NSMakeRect(319, 6, 1, 14), NSCompositingOperationSourceOver);
 
     // The keyboard's ring: white, set off from the control by a gap in the bar's colour.
     if (s_Focus >= 0) {
-        static const CGFloat lefts[] = {134, 175, 203, 231, 259, 300};
         NSBezierPath* ring = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(NSMakeRect(lefts[s_Focus], 4, 24, 18), -2.25, -2.25)
                                                              xRadius:8 yRadius:8];
         ring.lineWidth = 1.5;
@@ -530,6 +559,12 @@ static void fillTip(ChromeButton* button, std::vector<TipLine>& lines)
                   keyboard ? (s.fullscreen ? @"On. Space turns it off." : @"Off. Space turns it on.")
                   : s.fullscreen ? @"On." : @"Off.", shortcut(KEY_FULLSCREEN));
     }
+    else if (button == s_Bar->style) {
+        switchTip(lines, @"Title bar",
+                  keyboard ? (s_Titled ? @"On. Space turns it off." : @"Off. Space turns it on.")
+                  : s_Titled ? @"On. The window has a title bar of its own, and nothing is over the picture. Click for the bar that drops over it."
+                  : @"Off. The picture fills the window. Click for a title bar, with these switches in it.", nil);
+    }
     else if (button == s_Bar->gear) {
         lines.push_back({@"Settings", nil, nil, NSFontWeightSemibold, 0xF2F2F4FF, 0, false, 0});
         lines.push_back({@"Shortcuts", nil, nil, NSFontWeightRegular, 0xA0A0A8FF, 0, false, 1});
@@ -598,12 +633,13 @@ static void showTip(ChromeButton* button)
         [line.hint retain];
     }
 
-    NSView* content = s_Bar.superview;
+    // (Under the bar: over the picture's top edge, or just under the title bar.)
+    NSView* content = s_Content;
     NSRect anchor = [button convertRect:button.bounds toView:content];
     CGFloat height = [tip layout:NO];
     CGFloat x = round(NSMidX(anchor) - TIP_WIDTH / 2);
     x = MAX(6, MIN(x, content.bounds.size.width - TIP_WIDTH - 6));
-    tip.frame = NSMakeRect(x, content.bounds.size.height - 32 - height, TIP_WIDTH, height);
+    tip.frame = NSMakeRect(x, content.bounds.size.height - (s_Titled ? 6 : 32) - height, TIP_WIDTH, height);
     tip.hidden = NO;
     tip.needsDisplay = YES;
 }
@@ -614,8 +650,8 @@ static void showBar(bool show)
         return;
     }
     s_Shown = show;
-    s_Bar.hidden = !show;
-    s_Tab.hidden = show;
+    s_Bar.hidden = !show && !s_Titled;
+    s_Tab.hidden = show || s_Titled;
     [s_Bar.window invalidateCursorRectsForView:s_Bar];
     if (!show) {
         showTip(nil);
@@ -638,7 +674,7 @@ bool chromeShown()
 
 static ChromeButton* focused()
 {
-    ChromeButton* buttons[] = {s_Bar->link, s_Bar->stats, s_Bar->truePixels, s_Bar->follow, s_Bar->fullscreen, s_Bar->gear};
+    ChromeButton* buttons[] = {s_Bar->link, s_Bar->stats, s_Bar->truePixels, s_Bar->follow, s_Bar->fullscreen, s_Bar->style, s_Bar->gear};
     return s_Focus >= 0 ? buttons[s_Focus] : nil;
 }
 
@@ -721,13 +757,22 @@ static bool chromeTakes(int key, bool down, int sdlMods)
     }
     if (down) {
         if (key == SDLK_LEFT || key == SDLK_RIGHT) {
-            setFocus((s_Focus + (key == SDLK_LEFT ? 5 : 1)) % 6);
+            // (Past what is not there: the style's switch in fullscreen, the gear in a title bar.)
+            int next = s_Focus;
+            do {
+                next = (next + (key == SDLK_LEFT ? 6 : 1)) % 7;
+            } while ((next == 5 && s_Bar->style.hidden) || (next == 6 && s_Bar->gear.hidden));
+            setFocus(next);
         }
         else if (key == SDLK_SPACE || key == SDLK_RETURN) {
             ChromeButton* button = focused();
             if (button->action == -2) {
                 setFocus(-1);
                 chromeSettingsOpen(s_State.host);
+            }
+            else if (button->action == -3) {
+                setFocus(-1);
+                toggleStyle();
             }
             else if (button->action >= 0 && !button->busy && s_Action != nullptr) {
                 s_Action(button->action);
@@ -938,8 +983,11 @@ bool chromeUnseen()
     NSRect frame = window.frame;
     // MOONLIGHT_WINDOW_ONCE: its size was asked for by a link, for this stream only.
     bool once = getenv("MOONLIGHT_WINDOW_ONCE") != nullptr;
+    // (The size is the picture's, which with a title bar is not the window's:
+    // it is what the window is opened with the next time, whichever style it has then.)
+    NSSize inner = window.contentView.frame.size;
     managerSetDeviceWindow([@(device) stringByRemovingPercentEncoding] ?: @(device), lround(frame.origin.x), lround(NSMaxY(frame)),
-                           once ? 0 : lround(frame.size.width), once ? 0 : lround(frame.size.height));
+                           once ? 0 : lround(inner.width), once ? 0 : lround(inner.height));
 }
 - (void)coverChanged:(NSNotification*)note
 {
@@ -1061,6 +1109,120 @@ bool chromeUnseen()
 }
 @end
 
+// The window with a title bar of its own, or without one and the picture in
+// all of it (what dynresChromeless makes, see dynres_mac.mm). `keepFrame`: the
+// window stays as large as it is, and the picture takes what is left;
+// otherwise the picture stays as large as it is and the window is fitted
+// round it, so that the stream need not start again for the bar's 28 points.
+static void windowStyle(bool titled, bool keepFrame)
+{
+    NSWindow* w = s_Content.window;
+    if (w == nil || (w.styleMask & NSWindowStyleMaskFullScreen)) {
+        return;
+    }
+    NSSize picture = s_Content.frame.size;
+    NSPoint topLeft = NSMakePoint(NSMinX(w.frame), NSMaxY(w.frame));
+    if (titled) {
+        w.styleMask &= ~NSWindowStyleMaskFullSizeContentView;
+        w.titlebarAppearsTransparent = NO;
+        w.titleVisibility = NSWindowTitleVisible;
+        w.movable = YES;
+        // Dark, whatever the Mac's look: the switches are drawn for the dark bar.
+        w.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    }
+    else {
+        w.styleMask |= NSWindowStyleMaskFullSizeContentView;
+        w.titlebarAppearsTransparent = YES;
+        w.titleVisibility = NSWindowTitleHidden;
+        w.movableByWindowBackground = NO;
+        w.movable = NO;
+        w.appearance = nil;
+    }
+    // The window's own three lights: the red one and those beside it. (Asked
+    // for by name, the yellow and the green one come back as the bar's own,
+    // which hang in the same window.)
+    NSButton* close = [w standardWindowButton:NSWindowCloseButton];
+    for (NSView* beside in close.superview.subviews) {
+        if ([beside isKindOfClass:[NSButton class]]) {
+            beside.hidden = !titled;
+        }
+    }
+    // The red light keeps the stream warm, as the bar's does.
+    close.target = s_Warm;
+    close.action = @selector(closeAsked:);
+    if (!keepFrame) {
+        NSRect frame = [w frameRectForContentRect:NSMakeRect(0, 0, picture.width, picture.height)];
+        NSRect room = w.screen != nil ? w.screen.visibleFrame : frame;
+        frame.size.height = MIN(frame.size.height, room.size.height); // no taller than the screen has room for: then the picture gives
+        frame.origin = NSMakePoint(topLeft.x, MAX(topLeft.y - frame.size.height, NSMinY(room)));
+        [w setFrame:frame display:YES];
+    }
+}
+
+// The bar into the window's title bar, or back over the picture.
+static void placeBar(bool titled)
+{
+    NSWindow* w = s_Content.window;
+    if (s_Bar == nil || w == nil) {
+        return;
+    }
+    if (s_Accessory != nil) {
+        NSUInteger at = [w.titlebarAccessoryViewControllers indexOfObject:s_Accessory];
+        if (at != NSNotFound) {
+            [w removeTitlebarAccessoryViewControllerAtIndex:at];
+        }
+        [s_Accessory release];
+        s_Accessory = nil;
+    }
+    [s_Bar removeFromSuperview];
+    s_Titled = titled;
+    for (NSButton* light : s_Lights) {
+        light.hidden = titled;
+    }
+    s_Handle.hidden = titled;
+    s_Bar->gear.hidden = titled;
+    if (titled) {
+        NSView* box = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, TITLED_WIDTH, BAR_HEIGHT)] autorelease];
+        box.wantsLayer = YES;
+        box.layer.masksToBounds = YES; // only the switches' part of the bar shows
+        s_Bar.autoresizingMask = NSViewNotSizable;
+        s_Bar.frame = NSMakeRect(-TITLED_FROM, 0, BAR_WIDTH, BAR_HEIGHT);
+        [box addSubview:s_Bar];
+        s_Accessory = [[NSTitlebarAccessoryViewController alloc] init];
+        s_Accessory.view = box;
+        s_Accessory.layoutAttribute = NSLayoutAttributeRight;
+        [w addTitlebarAccessoryViewController:s_Accessory];
+        s_Bar.hidden = NO;
+        s_Tab.hidden = YES;
+    }
+    else {
+        CGFloat top = s_Content.bounds.size.height, middle = round(s_Content.bounds.size.width / 2);
+        s_Bar.frame = NSMakeRect(middle - round(BAR_WIDTH / 2.0), top - BAR_HEIGHT, BAR_WIDTH, BAR_HEIGHT);
+        s_Bar.autoresizingMask = NSViewMinXMargin | NSViewMaxXMargin | NSViewMinYMargin;
+        s_Bar.hidden = !s_Shown;
+        s_Tab.hidden = s_Shown;
+        chromeRaise();
+    }
+    showTip(nil);
+    for (NSView* view in s_Bar.subviews) {
+        view.needsDisplay = YES;
+    }
+}
+
+// The bar's own switch for it, and the keyboard's. Kept for the next window too.
+static void toggleStyle()
+{
+    NSWindow* w = s_Content.window;
+    if (s_Bar == nil || w == nil || (w.styleMask & NSWindowStyleMaskFullScreen)) {
+        return;
+    }
+    bool titled = !s_Titled;
+    [NSUserDefaults.standardUserDefaults setBool:titled forKey:@"TitleBar"];
+    windowStyle(titled, false);
+    placeBar(titled);
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, titled ? "The window has a title bar of its own" : "The bar is over the picture");
+}
+
 static ChromeButton* addButton(ChromeBar* bar, CGFloat x, NSString* symbol, int action)
 {
     ChromeButton* button = [[[ChromeButton alloc] initWithFrame:NSMakeRect(x, 4, 24, 18)] autorelease];
@@ -1088,6 +1250,16 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     NSView* content = w.contentView;
 
     // A new session has a new window; whatever hung in the last one went with it.
+    if (s_Accessory != nil) {
+        NSWindow* old = s_Accessory.view.window;
+        NSUInteger at = old != nil ? [old.titlebarAccessoryViewControllers indexOfObject:s_Accessory] : NSNotFound;
+        if (at != NSNotFound) {
+            [old removeTitlebarAccessoryViewControllerAtIndex:at];
+        }
+        [s_Accessory release];
+        s_Accessory = nil;
+    }
+    s_Titled = false;
     [s_Tab release];
     [s_Bar release];
     [s_Tip release];
@@ -1231,13 +1403,15 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     s_Lights[0].target = s_Warm;
     s_Lights[0].action = @selector(closeAsked:);
 
-    [bar addSubview:[[[ChromeHandle alloc] initWithFrame:NSMakeRect(98, 4, 28, 18)] autorelease]];
+    s_Handle = [[[ChromeHandle alloc] initWithFrame:NSMakeRect(98, 4, 28, 18)] autorelease];
+    [bar addSubview:s_Handle];
     bar->link = addButton(bar, 134, @"bolt.fill", -1);
     bar->stats = addButton(bar, 175, @"chart.bar.fill", CHROME_STATS);
     bar->truePixels = addButton(bar, 203, @"square.grid.2x2.fill", CHROME_TRUE_PIXELS);
     bar->follow = addButton(bar, 231, @"arrow.up.right.square", CHROME_FOLLOW);
     bar->fullscreen = addButton(bar, 259, @"arrow.down.left.and.arrow.up.right", CHROME_FULLSCREEN);
-    bar->gear = addButton(bar, 300, @"gearshape.fill", -2);
+    bar->style = addButton(bar, 287, @"macwindow", -3);
+    bar->gear = addButton(bar, 328, @"gearshape.fill", -2);
     s_Bar = bar;
 
     ChromeTip* tip = [[ChromeTip alloc] initWithFrame:NSMakeRect(0, 0, TIP_WIDTH, 60)];
@@ -1246,6 +1420,11 @@ void chromeStart(SDL_Window* window, void (*action)(int))
     s_Tip = tip;
 
     chromeRaise();
+    if ([NSUserDefaults.standardUserDefaults boolForKey:@"TitleBar"] && !(w.styleMask & NSWindowStyleMaskFullScreen)) {
+        // (A window that has its title bar already, from a session before, keeps its size.)
+        windowStyle(true, !(w.styleMask & NSWindowStyleMaskFullSizeContentView));
+        placeBar(true);
+    }
 
     // In fullscreen the Mac's own menu bar would slide down over the tab when
     // the pointer reaches the top edge. SDL can keep it away.
@@ -1258,7 +1437,9 @@ void chromeRaise()
         return;
     }
     [s_Content addSubview:s_Tab positioned:NSWindowAbove relativeTo:nil];
-    [s_Content addSubview:s_Bar positioned:NSWindowAbove relativeTo:nil];
+    if (!s_Titled) {
+        [s_Content addSubview:s_Bar positioned:NSWindowAbove relativeTo:nil];
+    }
     [s_Content addSubview:s_Tip positioned:NSWindowAbove relativeTo:nil];
 }
 
@@ -1277,6 +1458,11 @@ void chromeLeftFullscreen()
         light.needsDisplay = YES;
     }
     chromeRaise();
+    // The window's own style again: the frame it had is its title bar's too.
+    if ([NSUserDefaults.standardUserDefaults boolForKey:@"TitleBar"]) {
+        windowStyle(true, true);
+        placeBar(true);
+    }
 }
 
 void chromeUpdate(const ChromeState* state)
@@ -1290,10 +1476,14 @@ void chromeUpdate(const ChromeState* state)
     if (s_Content.subviews.lastObject != s_Tip) {
         chromeRaise();
     }
+    // Fullscreen has no title bar: the bar is over the picture there, whatever the window's style.
+    if (s_Titled && (state->fullscreen || (s_Bar.window.styleMask & NSWindowStyleMaskFullScreen))) {
+        placeBar(false);
+    }
     if (!state->fullscreen && !(s_Bar.window.styleMask & NSWindowStyleMaskFullScreen)) {
         s_WindowedFrame = s_Bar.window.frame;
     }
-    s_Tab.hidden = s_Shown;
+    s_Tab.hidden = s_Shown || s_Titled;
     s_Tab.needsDisplay = YES;
 
     static NSString* const symbols[] = {@"bolt.fill", @"cable.connector", @"wifi", @"globe", @"network"};
@@ -1309,7 +1499,9 @@ void chromeUpdate(const ChromeState* state)
     bar->follow->on = state->followSize;
     bar->follow->busy = state->busy;
     bar->fullscreen->on = state->fullscreen;
-    for (ChromeButton* button : {bar->link, bar->stats, bar->truePixels, bar->follow, bar->fullscreen, bar->gear}) {
+    bar->style->on = s_Titled;
+    bar->style.hidden = state->fullscreen; // one style there: nothing to switch
+    for (ChromeButton* button : {bar->link, bar->stats, bar->truePixels, bar->follow, bar->fullscreen, bar->style, bar->gear}) {
         button.needsDisplay = YES;
     }
     if (s_TipFor != nil) {
