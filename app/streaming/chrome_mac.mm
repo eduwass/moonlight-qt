@@ -904,7 +904,9 @@ bool chromeUnseen()
 // its window is out of sight, and this object stays for the next one.
 - (bool)live
 {
-    return window != nil && [NSApp.windows containsObject:window];
+    // By address only: a window that is gone must not be sent a message, and
+    // containsObject: sends one (it crashed the app on a Space change).
+    return window != nil && [NSApp.windows indexOfObjectIdenticalTo:window] != NSNotFound;
 }
 - (void)rest
 {
