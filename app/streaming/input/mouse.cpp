@@ -309,6 +309,19 @@ void SdlInputHandler::updatePointerRegionLock()
         Uint32 fullscreenFlags = SDL_GetWindowFlags(m_Window) & SDL_WINDOW_FULLSCREEN_DESKTOP;
         m_PointerRegionLockActive = (fullscreenFlags == SDL_WINDOW_FULLSCREEN) ||
                                     (fullscreenFlags != 0 && SDL_GetNumVideoDisplays() == 1);
+
+        // A fullscreen window that shares its display (macOS Split View) has another
+        // window beside it, and the pointer has to be able to get there. Width alone
+        // tells: a fullscreen window alone is as wide as its display, though not
+        // always as tall (the notch).
+        SDL_Rect display;
+        int windowWidth;
+        SDL_GetWindowSize(m_Window, &windowWidth, nullptr);
+        if (m_PointerRegionLockActive &&
+                SDL_GetDisplayBounds(SDL_GetWindowDisplayIndex(m_Window), &display) == 0 &&
+                windowWidth < display.w) {
+            m_PointerRegionLockActive = false;
+        }
     }
 
     // If region lock is enabled, grab the cursor so it can't accidentally leave our window.
