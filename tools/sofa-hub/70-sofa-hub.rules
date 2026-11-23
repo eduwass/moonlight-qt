@@ -1,0 +1,3 @@
+# Let the logged-in user read and grab the sofa keyboard and trackpad (sofa-hub).
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="keyd virtual keyboard", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Apple Inc. Magic Trackpad", TAG+="uaccess"

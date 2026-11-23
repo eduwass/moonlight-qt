@@ -1,0 +1,12 @@
+[Unit]
+Description=Sofa keyboard and trackpad drive the Apple TV, or this desktop while it is streamed
+After=graphical-session.target
+
+[Service]
+Environment=LOG_LEVEL=warn
+ExecStart=%h/.bun/bin/bun %h/.local/share/sofa-hub/hub.ts
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
