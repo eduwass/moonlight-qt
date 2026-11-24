@@ -2,6 +2,8 @@
 // Mac while it is streamed (through mac-receiver.swift on the Mac, see mac.ts).
 // In a stream the desktop gets a copy of the trackpad with palms filtered out, touch by touch (palm.ts).
 // The trackpad only works in a stream; on the Apple TV it is held so stray touches do nothing.
+// The volume keys always go to the Apple TV, which sets the TV's volume over HDMI-CEC; in a stream of
+// omarchypc the desktop gets the keyboard through the hub's own copy of it, without them.
 //
 //   bun hub.ts                  run the hub (the systemd user service does this)
 //   bun hub.ts mode tv|desktop|mac|toggle    tell the running hub where input goes
@@ -9,7 +11,7 @@
 import { existsSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { AppleTv } from "./appletv.ts";
 import { EV_KEY, InputDevice, deviceId, findEventNode, type InputEvent } from "./evdev.ts";
-import { HID, KEY, type Modifiers, isModeToggle, keyToHid, repeats } from "./keys.ts";
+import { HID, KEY, type Modifiers, isModeToggle, keyToHid, repeats, tvVolumeKey } from "./keys.ts";
 import { MacLink, MacTrackpad } from "./mac.ts";
 import { BTN, PalmFilter } from "./palm.ts";
 import { type AbsInfo, VirtualDevice } from "./uinput.ts";
@@ -53,7 +55,7 @@ function setMode(next: Mode): void {
   if (next !== mode) {
     console.log(`mode: ${next}`);
     // Lift whatever the place input is leaving still thinks is held.
-    if (mode === "desktop") virtualPad?.write(palm.reset());
+    if (mode === "desktop") virtualPad?.write(palm.reset()), liftKeys();
     if (mode === "mac") macPad.reset(), mac.send({ t: "reset" }), palm.reset();
     if (mode === "tv") releaseAll();
   }
@@ -102,7 +104,11 @@ let virtualPad: VirtualDevice | null = null;
 let lastKeyAt = 0;
 
 const wantsGrab = (name: string) =>
-  name === KEYBOARD && escDown ? mode !== "desktop" && mode !== "tv" : mode !== "desktop" || (name === TRACKPAD && virtualPad !== null);
+  name === KEYBOARD && virtualKeys
+    ? true // the desktop gets the keyboard through virtualKeys
+    : name === KEYBOARD && escDown
+      ? mode !== "desktop" && mode !== "tv"
+      : mode !== "desktop" || (name === TRACKPAD && virtualPad !== null);
 const regrab = () => { for (const [name, device] of devices) device.grab(wantsGrab(name)); };
 
 function makeVirtualPad(real: InputDevice): void {
@@ -147,6 +153,35 @@ const mac = new MacLink(
 const macPad = new MacTrackpad((m) => mac.send(m), Number(process.env.SOFA_MAC_TRACKING ?? 0.6875));
 
 // ----------------------------------------------------------------- keyboard
+// In a stream of omarchypc the hub holds the keyboard too and passes every key on to the desktop through
+// a copy of it, except the volume keys, which go to the Apple TV: the desktop would otherwise turn down its
+// own (Sunshine's) sound as well. The copy has keyd's vendor id, 0fac, which keyd leaves alone; any other
+// id and keyd would take it into the keyboard the hub reads, in a loop. Without the copy the desktop reads
+// keyd's keyboard itself, and the volume keys change both.
+
+const virtualKeys = (() => {
+  const keys = Array.from({ length: 0x2ff }, (_, i) => i + 1).filter((k) => k < 0x100 || k >= 0x160); // no mouse buttons
+  try {
+    return new VirtualDevice({ name: "sofa keyboard", id: { bus: 6, vendor: 0x0fac, product: 0x50fa, version: 1 }, props: [], keys, abs: new Map() });
+  } catch (error) {
+    console.error(`no keyboard copy, the desktop reads keyd's itself: ${(error as Error).message}`);
+    return null;
+  }
+})();
+const keysDown = new Set<number>(); // what the desktop has seen pressed through the copy
+
+function passKey(code: number, value: number): void {
+  if (!virtualKeys || (value !== 1 && !keysDown.has(code))) return; // never an up or repeat for a key it did not see go down
+  if (value === 1) keysDown.add(code);
+  if (value === 0) keysDown.delete(code);
+  virtualKeys.write([{ type: EV_KEY, code, value }]);
+}
+
+/** Lifts every key the desktop still thinks is held. */
+function liftKeys(): void {
+  for (const code of keysDown) virtualKeys?.write([{ type: EV_KEY, code, value: 0 }]);
+  keysDown.clear();
+}
 
 const WAKE_AFTER_MS = 2 * 60_000;
 let lastTvKeyAt = 0;
@@ -213,11 +248,16 @@ function onKeyboard(events: InputEvent[]): void {
       choose(mode === "tv" ? "desktop" : "tv");
       continue;
     }
-    if (mode === "mac") {
+    // In a stream the volume keys still go to the Apple TV, below; everything else to the computer.
+    const volume = mode === "tv" ? null : tvVolumeKey(code, mods);
+    if (mode === "mac" && volume === null) {
       if (value !== 2) mac.send({ t: "key", code, down }); // the Mac repeats held keys itself, at its own speed
       continue;
     }
-    if (mode !== "tv") continue;
+    if (mode === "desktop" && volume === null) {
+      passKey(code, value);
+      continue;
+    }
 
     if (value === 0) {
       const hid = held.get(code);
@@ -225,8 +265,8 @@ function onKeyboard(events: InputEvent[]): void {
       held.delete(code);
     } else if (value === 1) {
       // After a quiet spell the Apple TV is likely asleep: any key wakes it (and the TV, over HDMI-CEC) first.
-      if (Date.now() - lastTvKeyAt > WAKE_AFTER_MS) void tv.button(HID.Wake, true).then(() => tv.button(HID.Wake, false));
-      lastTvKeyAt = Date.now();
+      if (mode === "tv" && Date.now() - lastTvKeyAt > WAKE_AFTER_MS) void tv.button(HID.Wake, true).then(() => tv.button(HID.Wake, false));
+      if (mode === "tv") lastTvKeyAt = Date.now();
       const hid = keyToHid(code, mods);
       if (hid === null) continue;
       held.set(code, hid);

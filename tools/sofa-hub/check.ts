@@ -1,6 +1,6 @@
 // Self-check for the key mapping: bun check.ts
 import { equal } from "node:assert/strict";
-import { HID, KEY, isModeToggle, keyToHid, repeats } from "./keys.ts";
+import { HID, KEY, isModeToggle, keyToHid, repeats, tvVolumeKey } from "./keys.ts";
 
 const none = { meta: false, ctrl: false, alt: false, shift: false };
 const cmd = { ...none, meta: true };
@@ -18,6 +18,10 @@ equal(isModeToggle(KEY.ESC, hyper), true);
 equal(isModeToggle(KEY.ESC, cmd), false);
 equal(repeats(HID.Left), true);
 equal(repeats(HID.Select), false);
+equal(tvVolumeKey(KEY.VOLUMEUP, none), HID.VolumeUp, "volume up goes to the TV in a stream");
+equal(tvVolumeKey(KEY.MUTE, none), HID.Mute);
+equal(tvVolumeKey(KEY.F12, none), null, "F12 stays an F-key in a stream");
+equal(tvVolumeKey(KEY.VOLUMEDOWN, { ...none, shift: true }), null, "with a modifier it is the computer's");
 
 // Palm rejection, touch by touch.
 {

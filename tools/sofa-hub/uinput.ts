@@ -1,4 +1,4 @@
-// A virtual input device through /dev/uinput, built as a copy of a real one's capabilities.
+// A virtual input device through /dev/uinput, built as a copy of a real one's capabilities (or a plain keyboard).
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import { closeSync, constants, openSync, writeSync } from "node:fs";
 
@@ -34,7 +34,7 @@ export class VirtualDevice {
       if (libc.ioctl(this.fd, request, arg) < 0) throw new Error(`uinput ioctl 0x${request.toString(16)} failed`);
     };
     io(UI_SET_EVBIT, 1); // EV_KEY
-    io(UI_SET_EVBIT, 3); // EV_ABS
+    if (spec.abs.size) io(UI_SET_EVBIT, 3); // EV_ABS; a keyboard has none
     for (const prop of spec.props) io(UI_SET_PROPBIT, prop);
     for (const k of spec.keys) io(UI_SET_KEYBIT, k);
     for (const [code, a] of spec.abs) {
