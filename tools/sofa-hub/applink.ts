@@ -56,7 +56,8 @@ export class AppLink {
               if (m?.t === "screen" && ["home", "stream", "other"].includes(m.name)) this.setScreen(m.name);
               else if (m?.t === "settings") this.on.settings(m);
               else if (m?.t === "restart" && typeof m.host === "string") this.on.restart(m.host);
-              else if (["trySize", "keepSize", "cancelSize", "tone"].includes(m?.t) && typeof m.host === "string") this.on.request(m);
+              else if (["trySize", "keepSize", "cancelSize", "tone", "speed"].includes(m?.t) && typeof m.host === "string") this.on.request(m);
+              else if (m?.t === "offer") this.on.request(m);
               else if (m?.t === "screenshot" && typeof m.jpeg === "string") {
                 // The answer to `bun hub.ts screenshot`: what the Apple TV shows, for debugging.
                 const path = `${process.env.XDG_RUNTIME_DIR ?? "/tmp"}/sofa-app-screenshot.jpg`;
@@ -76,6 +77,11 @@ export class AppLink {
         },
       },
     });
+  }
+
+  /** The app's address, while it is connected. */
+  get address(): string | null {
+    return this.socket ? peerAddress(this.socket.remoteAddress) : null;
   }
 
   get connected(): boolean {

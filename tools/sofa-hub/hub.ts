@@ -21,6 +21,7 @@ import { MacLink, MacTrackpad } from "./mac.ts";
 import { BTN, PalmFilter } from "./palm.ts";
 import { loadSettings, parseMode, parseSettings, saveSettings } from "./settings.ts";
 import { type Host, PREVIEW_MAX, hidBatteries, localHost, localPreview, shapeApps, sofaDevices } from "./stats.ts";
+import { sendSpeed } from "./speed.ts";
 import { playTone } from "./tone.ts";
 import { type AbsInfo, VirtualDevice } from "./uinput.ts";
 
@@ -82,6 +83,7 @@ let lastSofaInputAt = 0;
 const fromSofa = () => Date.now() - lastSofaInputAt < SOFA_CLAIM_MS;
 let desktopStreamed = false;
 let macStreamed = false;
+const KEY_B = 48; // linux/input-event-codes.h
 // The streams being watched outlive a restart of the hub (a deploy), so input stays where it was.
 // ponytail: a stream that ends while the hub is down is missed; holding Esc 5 s gets back to the Apple TV.
 const STATE = `${process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`}/sofa-hub-streams.json`;
@@ -161,12 +163,26 @@ const mac = new MacLink(
       decide();
     },
     stats: (host) => (macHost = { host, at: Date.now() }),
-    presence: () => sendHello(),
+    presence: () => (sendHello(), syncInstantCursor()),
     line: (line) => onMacLine(line),
   },
 );
 const padOptions = () => ({ tracking: settings.trackpadSpeed, tapToClick: settings.tapToClick, naturalScroll: settings.naturalScroll });
-const macPad = new MacTrackpad((m) => mac.send(m), padOptions());
+// Each move to the Mac is numbered and, with the instant cursor on, also sent to the app, which draws the
+// cursor at once and corrects it from the receiver's `cursor <seq> <x> <y> <w> <h>` (onMacLine).
+let cursorSeq = 0;
+const macPad = new MacTrackpad((m) => {
+  if (m.t !== "move") return mac.send(m);
+  const seq = ++cursorSeq;
+  mac.send({ ...m, seq });
+  if (settings.instantCursor && app.connected) app.send({ t: "cursor", dx: m.dx, dy: m.dy, seq });
+}, padOptions());
+
+/** Tells the receiver whether the Apple TV draws the cursor itself (from the next stream). */
+function syncInstantCursor(): void {
+  const client = app.address ?? (process.env.SOFA_APP_PEERS ?? "192.168.68.67").split(",")[0]!;
+  if (mac.connected) mac.send({ t: "instantCursor", on: settings.instantCursor, client });
+}
 
 // ----------------------------------------------------------------- the Sofa app on the Apple TV
 // The app's list of computers shows the sofa devices' batteries and each computer's stats. On that
@@ -275,6 +291,7 @@ function applySettings(m: Record<string, unknown>): void {
     regrab();
   }
   if (prev.statsEvery !== settings.statsEvery || prev.previewsEvery !== settings.previewsEvery) homeTimers();
+  if (prev.instantCursor !== settings.instantCursor) syncInstantCursor();
 }
 
 // Restarting from the app: omarchypc reboots itself (logind lets the session's user; its disk unlocks
@@ -310,6 +327,9 @@ async function sizeWhyNot(): Promise<string> {
   return "";
 }
 
+let offerOn = false;
+let offerTimer: Timer | undefined;
+
 let pendingTone: { host: string; timer: Timer; path: Promise<number | null> } | null = null;
 
 // The input path's one-way time for the app's responsiveness estimate: omarchypc's input is injected here
@@ -337,6 +357,24 @@ function onRequest(m: Record<string, unknown>): void {
   const pair = (v: unknown) => (Array.isArray(v) && v.length === 2 && v.every((n) => Number.isInteger(n) && n > 0) ? (v as [number, number]) : null);
   const pixels = pair(m.pixels);
   const looks = pair(m.looks);
+  if (m.t === "offer") {
+    // The app's mid-stream offer of a lower bitrate is showing: ⌥⌘B takes it (onKeyboard).
+    clearTimeout(offerTimer);
+    offerOn = m.on === true;
+    if (offerOn) offerTimer = setTimeout(() => (offerOn = false), 15_000);
+    return;
+  }
+  if (m.t === "speed") {
+    // The app listens on `port`; the computer sends it bytes for `seconds`, so the measure is its own path.
+    const port = Number(m.port), seconds = Math.min(Math.max(Number(m.seconds) || 4, 1), 10);
+    const addr = app.address;
+    const reply = (ok: boolean, more: object) => app.send({ t: "speed", host, ok, ...more });
+    if (!addr || !Number.isInteger(port) || port < 1 || port > 65535) return reply(false, { error: "bad request" });
+    if (here) return void sendSpeed(addr, port, seconds).then((bytes) => reply(true, { bytes }), (e) => reply(false, { error: (e as Error).message }));
+    if (host.toLowerCase() !== macName().toLowerCase()) return reply(false, { error: `no computer called ${host}` });
+    if (!mac.connected) return reply(false, { error: "the Mac's receiver is not connected" });
+    return mac.send({ t: "speed", addr, port, seconds });
+  }
   if (m.t === "tone") {
     const seconds = Math.min(Math.max(Number(m.seconds) || 6, 1), 30);
     const reply = (ok: boolean, error?: string, path: number | null = null) =>
@@ -381,6 +419,11 @@ function onMacLine(line: string): void {
     pendingRestart = null;
     console.log(`restart: ${host}: ${line}`);
     app.send({ t: "restart", host, ok: word === "restarting", ...(word === "restart-failed" ? { error: rest || "failed" } : {}) });
+  } else if (word === "cursor") {
+    const [seq, x, y, w, h] = rest.split(" ").map(Number);
+    if (settings.instantCursor && app.connected && [seq, x, y, w, h].every(Number.isFinite)) app.send({ t: "cursorAt", seq, x, y, w, h });
+  } else if (word === "speed-done" || word === "speed-failed") {
+    app.send({ t: "speed", host: macName(), ok: word === "speed-done", ...(word === "speed-done" ? { bytes: Number(rest) || 0 } : { error: rest || "failed" }) });
   } else if (word === "pong") {
     pongs.get(Number(rest))?.();
     pongs.delete(Number(rest));
@@ -489,6 +532,11 @@ function onKeyboard(events: InputEvent[]): void {
       if (escDown) (escDown = false), regrab();
     }
 
+    // ⌥⌘B while the app offers a lower bitrate mid-stream: taken, and kept from the computer.
+    if (offerOn && code === KEY_B && mods.alt && mods.meta && value !== 0) {
+      if (value === 1) (offerOn = false), clearTimeout(offerTimer), app.send({ t: "offerTaken" }), console.log("offer: taken");
+      continue;
+    }
     if (value === 1 && isModeToggle(code, mods)) {
       choose(mode === "tv" ? "desktop" : "tv");
       continue;

@@ -14,6 +14,7 @@ export type Settings = {
   naturalScroll: boolean;
   volumeKeysToTV: boolean; // in a stream the volume keys go to the Apple TV, not the computer
   apps: AppsShown;
+  instantCursor: boolean; // the Apple TV draws the Mac's cursor; off: Sunshine draws it in the picture
 };
 
 export const DEFAULTS: Settings = {
@@ -26,6 +27,7 @@ export const DEFAULTS: Settings = {
   naturalScroll: true,
   volumeKeysToTV: true,
   apps: "titles",
+  instantCursor: true,
 };
 
 const num = (v: unknown, min: number, max: number) => (typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? v : undefined);
@@ -43,6 +45,7 @@ export function parseSettings(m: Record<string, unknown>, prev: Settings = DEFAU
     naturalScroll: bool(m.naturalScroll) ?? prev.naturalScroll,
     volumeKeysToTV: bool(m.volumeKeysToTV) ?? prev.volumeKeysToTV,
     apps: m.apps === "titles" || m.apps === "names" || m.apps === "off" ? m.apps : prev.apps,
+    instantCursor: bool(m.instantCursor) ?? prev.instantCursor,
   };
 }
 

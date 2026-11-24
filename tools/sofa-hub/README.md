@@ -35,7 +35,7 @@ the Apple TV at 192.168.68.67; the newest connection wins). One JSON object per 
 
 // app -> hub, on connect and on every change; kept in ~/.config/sofa-hub/app-settings.json across restarts
 {"t":"settings","statsEvery":5,"previewsEvery":300,"tvMode":"1920x1080@60","tvScale":1.6,"trackpadSpeed":0.6875,"tapToClick":false,
- "naturalScroll":true,"volumeKeysToTV":true,"apps":"titles"}   // apps: "titles" | "names" | "off"
+ "naturalScroll":true,"volumeKeysToTV":true,"apps":"titles","instantCursor":true}   // apps: "titles" | "names" | "off"
 
 // app -> hub: restart a computer; the hub answers {"t":"restart","host":"MBP13","ok":false,"error":"..."}
 {"t":"restart","host":"omarchypc"}      // or "MBP13"
@@ -87,7 +87,27 @@ the Apple TV at 192.168.68.67; the newest connection wins). One JSON object per 
 {"t":"move","dx":3.2,"dy":-1.5}
 {"t":"button","b":"left","down":true}  // b: "left" | "right" (two fingers)
 {"t":"scroll","dx":0,"dy":12.5,"phase":2,"momentum":0}  // CGScrollPhase / CGMomentumScrollPhase values
+
+// hub -> app, while the sofa streams the Mac with instantCursor on: every move sent to the Mac (points, numbered),
+// and from the receiver where the cursor will be once moves up to seq are applied (main display, points, w x h).
+// The app draws its own cursor at the last cursorAt plus the moves after it, so it follows the finger at once
+{"t":"cursor","dx":3.2,"dy":-1.5,"seq":1234}
+{"t":"cursorAt","seq":1234,"x":480.5,"y":270,"w":960,"h":540}
+
+// app -> hub: a speed check of one computer. The app listens on port; the computer (omarchypc itself, or the
+// Mac's receiver) connects and writes bytes for seconds (1-10), so the app measures that computer's own path
+// to the TV; the hub answers when the sender is done
+{"t":"speed","host":"MBP13","port":47996,"seconds":4}
+{"t":"speed","host":"MBP13","ok":true,"bytes":24000000}   // or "ok":false,"error":"..."
+
+// app -> hub: its mid-stream offer of a lower bitrate is showing (or not); ⌥⌘B then goes to the app, not the computer
+{"t":"offer","on":true}
+{"t":"offerTaken"}                                         // hub -> app
 ```
+
+Each host in stats also has its link: `{"kind":"wifi","band":"5 GHz","rssi":-60,"rateMbps":648}` or
+`{"kind":"ethernet","rateMbps":1000}` (null without a route). instantCursor off puts the Apple TV in the Mac's
+`~/.config/sunshine/picture-cursor-clients`, so Sunshine draws the cursor in the picture from the next stream.
 
 cpu is % busy since the last sample; sizes are bytes; uptime is seconds; apps are what is on screen,
 most recent first, at most 5, browsers with their tab (no address) unless `apps` says otherwise.

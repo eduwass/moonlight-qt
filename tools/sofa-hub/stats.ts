@@ -1,7 +1,7 @@
 // What the Sofa app's list of computers shows about each one: load, memory, disk, uptime, what is on
 // screen, and the sofa keyboard and trackpad's batteries. omarchypc's is gathered here; the Mac's
 // receiver sends its own (mac-receiver.swift). The parsers are pure, so check.ts can test them.
-import { readdirSync, readFileSync, statfsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statfsSync, statSync } from "node:fs";
 import { hostname, networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 
 export type Host = {
@@ -20,7 +20,11 @@ export type Host = {
   os: "linux" | "macos";
   pressure: Pressure;
   display?: Display;
+  link?: Link | null;
 };
+
+/** How a computer reaches the network: Wi-Fi (band, signal in dBm, rate) or a cable (its speed). */
+export type Link = { kind: "wifi"; band?: string; rssi?: number; rateMbps?: number } | { kind: "ethernet"; rateMbps: number };
 
 /** A screen as the Sofa app's display settings show it: its pixels, the scale it is drawn at, the size it
  * looks (pixels / scale), the sizes it may be set to, and whether one can be tried now (why not if not). */
@@ -192,7 +196,17 @@ export async function localHost(name: string): Promise<Host> {
     apps: await hyprlandApps(),
     os: "linux",
     pressure: linuxPressure(readText("/proc/pressure/memory"), readText("/proc/meminfo")),
+    link: await linuxLink(),
   };
+}
+
+/** The interface of the default route and what it is: a wireless one (sysfs has `wireless`) or a cable. */
+async function linuxLink(): Promise<Link | null> {
+  const route = new TextDecoder().decode((await run(["ip", "route", "get", "1.1.1.1"], process.env, 2000).catch(() => null)) ?? new Uint8Array());
+  const dev = route.match(/ dev (\S+)/)?.[1];
+  if (!dev || !/^[\w.-]+$/.test(dev)) return null;
+  if (existsSync(`/sys/class/net/${dev}/wireless`)) return { kind: "wifi" };
+  return { kind: "ethernet", rateMbps: Math.max(0, Number(readText(`/sys/class/net/${dev}/speed`).trim()) || 0) };
 }
 
 const readText = (path: string) => {

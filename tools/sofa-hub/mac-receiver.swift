@@ -4,6 +4,7 @@
 // screen (needs Screen Recording), a test tone, or it restarts the Mac (fdesetup authrestart, setup-mac-restart.sh).
 // Needs Accessibility permission. Build: swiftc -O mac-receiver.swift -o ~/.local/bin/sofa-receiver
 import AppKit
+import CoreWLAN
 import Foundation
 import ImageIO
 import Network
@@ -119,6 +120,22 @@ Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { _ in
 }
 
 func queueMove(_ dx: Double, _ dy: Double) { pending.x += dx; pending.y += dy }
+
+// MARK: - Instant cursor
+// The Apple TV draws the cursor itself as the hub's moves arrive, and corrects it from these: where the
+// cursor will be once everything up to move `lastSeq` is applied (pending smoothing included), in points
+// from the main display's top left, with its size. Sent at most 60 times a second, only when it changes and
+// only while streamed; it changes by itself too (Mission Control, warps), which this also catches.
+var lastSeq = 0
+var lastCursorReport = ""
+Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { _ in
+  guard streaming else { return }
+  let c = cursor()
+  let at = clamp(CGPoint(x: c.x + pending.x, y: c.y + pending.y))
+  let b = CGDisplayBounds(CGMainDisplayID())
+  let report = String(format: "cursor %d %.1f %.1f %d %d", lastSeq, at.x - b.minX, at.y - b.minY, Int(b.width), Int(b.height))
+  if report != lastCursorReport { lastCursorReport = report; say(report) }
+}
 
 /// A click lands where the cursor is shown, so pending movement is applied first.
 func flushMoves() {
@@ -308,7 +325,7 @@ func handle(_ line: Substring) {
   let d = { (k: String) in (m[k] as? Double) ?? 0 }
   switch t {
   case "key": key(m["code"] as? Int ?? 0, m["down"] as? Bool ?? false)
-  case "move": queueMove(d("dx"), d("dy"))
+  case "move": queueMove(d("dx"), d("dy")); if let seq = m["seq"] as? Int { lastSeq = seq }
   case "button": flushMoves(); button(m["b"] as? String ?? "left", m["down"] as? Bool ?? false)
   case "scroll": scroll(d("dx"), d("dy"), phase: Int64(d("phase")), momentum: Int64(d("momentum")))
   case "magnify": magnify(d("m"), phase: Int64(d("phase")))
@@ -321,6 +338,8 @@ func handle(_ line: Substring) {
   case "restart": DispatchQueue.global().async { restart() }
   case "ping": say("pong \(m["id"] as? Int ?? 0)") // the hub times the input path with these
   case "tone": tone(seconds: min(max(d("seconds"), 1), 30))
+  case "speed": speedTest(to: m["addr"] as? String ?? "", port: Int(d("port")), seconds: min(max(d("seconds"), 1), 10))
+  case "instantCursor": pictureCursor(client: m["client"] as? String ?? "", inPicture: !(m["on"] as? Bool ?? true))
   default: break
   }
 }
@@ -468,7 +487,78 @@ func stats() -> [String: Any] {
     "os": "macos",
     "pressure": memoryPressure(),
     "display": displayFacts(),
+    "link": linkFacts() ?? NSNull(),
   ]
+}
+
+/// How this Mac reaches the network: the primary interface, Wi-Fi with band, signal and rate, or a cable with
+/// its speed. Nil when there is no route.
+func linkFacts() -> [String: Any]? {
+  guard let global = SCDynamicStoreCopyValue(nil, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
+        let name = global["PrimaryInterface"] as? String else { return nil }
+  if let wifi = CWWiFiClient.shared().interface(withName: name), wifi.powerOn() {
+    var link: [String: Any] = ["kind": "wifi", "rssi": wifi.rssiValue(), "rateMbps": Int(wifi.transmitRate())]
+    switch wifi.wlanChannel()?.channelBand {
+    case .band2GHz?: link["band"] = "2.4 GHz"
+    case .band5GHz?: link["band"] = "5 GHz"
+    case .band6GHz?: link["band"] = "6 GHz"
+    default: break
+    }
+    return link
+  }
+  // "media: autoselect (1000baseT <full-duplex>)"
+  let media = run("/sbin/ifconfig", [name]) ?? ""
+  let rate = media.range(of: #"\((\d+)base"#, options: .regularExpression).map { Int(media[$0].dropFirst().prefix { $0.isNumber }) ?? 0 } ?? 0
+  return ["kind": "ethernet", "rateMbps": rate]
+}
+
+// MARK: - Speed test: the Apple TV listens, this Mac sends it bytes for a few seconds, so the measure is
+// this Mac's own path to the TV (its Wi-Fi included) and the firewall here is not in the way.
+
+let speedQueue = DispatchQueue(label: "speed")
+
+func speedTest(to address: String, port: Int, seconds: Double) {
+  guard address.range(of: #"^\d{1,3}(\.\d{1,3}){3}$"#, options: .regularExpression) != nil, (1...65535).contains(port),
+        let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else { return say("speed-failed bad address") }
+  let conn = NWConnection(host: NWEndpoint.Host(address), port: nwPort, using: .tcp)
+  let chunk = Data(count: 256 * 1024)
+  var sent = 0
+  var done = false
+  let finish = { (word: String) in
+    guard !done else { return }
+    done = true
+    conn.cancel()
+    say(word)
+  }
+  var end = Date()
+  func pump() {
+    if Date() >= end { return finish("speed-done \(sent)") }
+    conn.send(content: chunk, completion: .contentProcessed { error in
+      if let error { return finish("speed-failed \(error)") }
+      sent += chunk.count
+      pump()
+    })
+  }
+  conn.stateUpdateHandler = { state in
+    switch state {
+    case .ready: end = Date().addingTimeInterval(seconds); pump()
+    case .failed(let error): finish("speed-failed \(error)")
+    default: break
+    }
+  }
+  conn.start(queue: speedQueue)
+  speedQueue.asyncAfter(deadline: .now() + seconds + 5) { finish("speed-failed timed out") }
+}
+
+// MARK: - Instant cursor on or off: Sunshine's prep command (sunshine-display.sh) leaves the cursor in the
+// picture for the clients listed in picture-cursor-clients and sends the others its shapes instead.
+
+func pictureCursor(client: String, inPicture: Bool) {
+  guard client.range(of: #"^\d{1,3}(\.\d{1,3}){3}$"#, options: .regularExpression) != nil else { return }
+  let path = NSHomeDirectory() + "/.config/sunshine/picture-cursor-clients"
+  let lines = ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init).filter { !$0.isEmpty && $0 != client }
+  let next = (inPicture ? lines + [client] : lines).map { $0 + "\n" }.joined()
+  try? next.write(toFile: path, atomically: true, encoding: .utf8)
 }
 
 /// The main display's pixels, the scale it is drawn at and the size it looks (points), for the Sofa app.

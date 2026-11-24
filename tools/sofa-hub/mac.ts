@@ -10,7 +10,7 @@ import type { Host } from "./stats.ts";
 
 export type MacMessage =
   | { t: "key"; code: number; down: boolean }
-  | { t: "move"; dx: number; dy: number }
+  | { t: "move"; dx: number; dy: number; seq?: number }
   | { t: "button"; b: "left" | "right"; down: boolean }
   | { t: "scroll"; dx: number; dy: number; phase: number; momentum: number }
   | { t: "magnify"; m: number; phase: number }
@@ -21,7 +21,9 @@ export type MacMessage =
   | { t: "preview" }
   | { t: "restart" }
   | { t: "tone"; seconds: number }
-  | { t: "ping"; id: number };
+  | { t: "ping"; id: number }
+  | { t: "speed"; addr: string; port: number; seconds: number }
+  | { t: "instantCursor"; on: boolean; client: string };
 
 // CGScrollPhase and CGMomentumScrollPhase values.
 const PHASE = { None: 0, Began: 1, Changed: 2, Ended: 4 } as const;

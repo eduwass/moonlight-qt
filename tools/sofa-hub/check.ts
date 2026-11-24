@@ -1,5 +1,5 @@
 // Self-check for the key mapping: bun check.ts
-import { deepEqual, equal } from "node:assert/strict";
+import { deepEqual, equal, ok } from "node:assert/strict";
 import { HID, KEY, isModeToggle, keyToHid, repeats, tvVolumeKey } from "./keys.ts";
 
 const none = { meta: false, ctrl: false, alt: false, shift: false };
@@ -92,8 +92,8 @@ equal(tvVolumeKey(KEY.VOLUMEDOWN, { ...none, shift: true }), null, "with a modif
   const { MacTrackpad } = await import("./mac.ts");
   const { ABS, EV_ABS } = await import("./palm.ts");
 
-  const s = parseSettings({ t: "settings", statsEvery: 30, previewsEvery: 300, tvMode: "3840x2160@60", tvScale: 2, trackpadSpeed: 1, tapToClick: true, naturalScroll: false, volumeKeysToTV: false, apps: "names" });
-  deepEqual(s, { statsEvery: 30, previewsEvery: 300, tvMode: "3840x2160@60", tvScale: 2, trackpadSpeed: 1, tapToClick: true, naturalScroll: false, volumeKeysToTV: false, apps: "names" });
+  const s = parseSettings({ t: "settings", statsEvery: 30, previewsEvery: 300, tvMode: "3840x2160@60", tvScale: 2, trackpadSpeed: 1, tapToClick: true, naturalScroll: false, volumeKeysToTV: false, apps: "names", instantCursor: false });
+  deepEqual(s, { statsEvery: 30, previewsEvery: 300, tvMode: "3840x2160@60", tvScale: 2, trackpadSpeed: 1, tapToClick: true, naturalScroll: false, volumeKeysToTV: false, apps: "names", instantCursor: false });
   deepEqual(parseSettings({ statsEvery: -1, tvMode: "4k", tvScale: "big", apps: "all", naturalScroll: 1 }, s), s, "bad fields keep what was there");
   deepEqual(parseSettings({}), DEFAULTS);
 
@@ -212,5 +212,15 @@ equal(tvVolumeKey(KEY.VOLUMEDOWN, { ...none, shift: true }), null, "with a modif
   equal(Math.abs(peak - Math.round(32767 * 10 ** (-12 / 20))) <= 2, true, "-12 dBFS peak");
   equal(Math.abs(v.getInt16(44 + 4 * 5, true)) < 0.1 * peak, true, "fades in");
   equal(v.getInt16(wav.length - 4, true), 0, "and out to silence");
+}
+{
+  // speed.ts: everything written for the time asked arrives at a listener.
+  const { sendSpeed } = await import("./speed.ts");
+  let got = 0;
+  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data: (_s, d) => void (got += d.length) } });
+  const sent = await sendSpeed("127.0.0.1", server.port, 1);
+  await Bun.sleep(200);
+  server.stop(true);
+  ok(sent > 0 && got === sent, `speed: sent ${sent}, got ${got}`);
 }
 console.log("sofa-hub check passed");
