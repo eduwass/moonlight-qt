@@ -187,7 +187,7 @@ export class MacTrackpad {
       // Fingers land one by one: the most this touch has had counts, not the number down right now.
       const most = Math.max(fingers, this.touch?.fingers ?? 0);
       sw.axis = Math.abs(sw.x) >= Math.abs(sw.y) ? "h" : most >= 4 ? "bar" : "v";
-      if (sw.axis === "bar") console.log(`mac: four fingers ${sw.y < 0 ? "up, menu bar hidden" : "down, menu bar shown"}`);
+      if (sw.axis === "bar") console.log(`mac: four fingers ${sw.y < 0 ? "up" : "down"}`);
       if (sw.axis === "bar") return this.send({ t: "menubar", hide: sw.y < 0 });
       return this.send({ t: "dock", axis: sw.axis, d: this.dockDelta(sw.x, sw.y), phase: HID_PHASE.Began });
     }

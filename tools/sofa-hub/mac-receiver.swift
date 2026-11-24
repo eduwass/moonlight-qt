@@ -187,6 +187,17 @@ func dinky(_ args: [String]) {
   try? Process.run(URL(fileURLWithPath: NSHomeDirectory() + "/.local/bin/dinky"), arguments: args)
 }
 
+// Four fingers up hides the menu bar, and once it is hidden opens Mission Control; down shows the bar.
+func fourFingers(up: Bool) {
+  let hidden = CFPreferencesCopyAppValue("_HIHideMenuBar" as CFString, kCFPreferencesAnyApplication) as? Bool ?? false
+  if up && hidden {
+    print("mission control")
+    try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: ["-a", "Mission Control"])
+    return
+  }
+  menuBar(hidden: up)
+}
+
 // The menu bar hides the way System Settings > Control Center > "Automatically hide and show the menu
 // bar" does: WindowServer's flag (which dinky reads), the setting, then the notice every app acts on;
 // without the last two, apps keep their windows below where the bar was.
@@ -284,7 +295,7 @@ func handle(_ line: Substring) {
   case "scroll": scroll(d("dx"), d("dy"), phase: Int64(d("phase")), momentum: Int64(d("momentum")))
   case "magnify": magnify(d("m"), phase: Int64(d("phase")))
   case "smartzoom": smartZoom()
-  case "menubar": menuBar(hidden: m["hide"] as? Bool ?? false)
+  case "menubar": fourFingers(up: m["hide"] as? Bool ?? false)
   case "dock": dockSwipe(d("d"), vertical: (m["axis"] as? String) == "v", phase: Int64(d("phase")))
   case "raw": raw(m)
   case "reset": resetAll()
