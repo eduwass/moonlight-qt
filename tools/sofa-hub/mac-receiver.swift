@@ -262,7 +262,9 @@ var logOffset: UInt64 = 0
 
 func streamState(_ text: Substring) -> Bool? {
   for line in text.split(separator: "\n").reversed() {
-    if line.contains("CLIENT DISCONNECTED") { return false }
+    // macOS can stop the screen capture under a stream (low disk, display changes) and Sunshine then
+    // never logs the disconnect; the client is gone all the same.
+    if line.contains("CLIENT DISCONNECTED") || line.contains("ScreenCaptureKit: stopped") { return false }
     if line.contains("CLIENT CONNECTED") { return true }
   }
   return nil
