@@ -13,6 +13,7 @@ export type MacMessage =
   | { t: "scroll"; dx: number; dy: number; phase: number; momentum: number }
   | { t: "magnify"; m: number; phase: number }
   | { t: "smartzoom" }
+  | { t: "menubar"; hide: boolean }
   | { t: "dock"; d: number; axis: "h" | "v"; phase: number }
   | { t: "reset" };
 
@@ -77,7 +78,7 @@ export class MacTrackpad {
   private scrolling = false;
   private velocity: Point = { x: 0, y: 0 }; // scroll points per ms, smoothed
   private momentum: Timer | undefined;
-  private swipe: { axis: "h" | "v" | null; x: number; y: number } = { axis: null, x: 0, y: 0 };
+  private swipe: { axis: "h" | "v" | "bar" | null; x: number; y: number } = { axis: null, x: 0, y: 0 };
   private two: { mode: "scroll" | "pinch" | null; start: number; last: number; moved: number } | null = null;
   private lastTwoFingerTap = 0;
   private touch: { start: number; fingers: number; travel: number; clicked: boolean } | null = null;
@@ -133,7 +134,7 @@ export class MacTrackpad {
     } else if (count === 2) {
       this.twoFingers(dx, dy, dt, speed);
     } else {
-      this.dockSwipe(dx, dy);
+      this.dockSwipe(dx, dy, count);
     }
   }
 
@@ -169,14 +170,17 @@ export class MacTrackpad {
   }
 
   // Three or four fingers drive the Dock's own swipe: Spaces slide under the fingers, up is Mission
-  // Control, down App Exposé. The first 2 mm pick the direction.
-  private dockSwipe(dx: number, dy: number): void {
+  // Control, down App Exposé. The first 2 mm pick the direction. Four fingers up or down instead hide
+  // or show the menu bar, as on omarchypc, where they hide and show the top bar.
+  private dockSwipe(dx: number, dy: number, fingers: number): void {
     const sw = this.swipe;
+    if (sw.axis === "bar") return;
     if (!sw.axis) {
       sw.x += dx;
       sw.y += dy;
       if (Math.hypot(sw.x, sw.y) < DECIDE_UNITS) return;
-      sw.axis = Math.abs(sw.x) >= Math.abs(sw.y) ? "h" : "v";
+      sw.axis = Math.abs(sw.x) >= Math.abs(sw.y) ? "h" : fingers >= 4 ? "bar" : "v";
+      if (sw.axis === "bar") return this.send({ t: "menubar", hide: sw.y < 0 });
       return this.send({ t: "dock", axis: sw.axis, d: this.dockDelta(sw.x, sw.y), phase: HID_PHASE.Began });
     }
     this.send({ t: "dock", axis: sw.axis, d: this.dockDelta(dx, dy), phase: HID_PHASE.Changed });
@@ -216,7 +220,7 @@ export class MacTrackpad {
   private fingersChanged(from: number, to: number): void {
     if (from === 2 && this.two?.mode === "pinch") this.send({ t: "magnify", m: 0, phase: HID_PHASE.Ended });
     if (to !== 2) this.two = null;
-    if (from >= 3 && to < 3 && this.swipe.axis) this.send({ t: "dock", axis: this.swipe.axis, d: 0, phase: HID_PHASE.Ended });
+    if (from >= 3 && to < 3 && (this.swipe.axis === "h" || this.swipe.axis === "v")) this.send({ t: "dock", axis: this.swipe.axis, d: 0, phase: HID_PHASE.Ended });
     if (from === 2 && this.scrolling) {
       this.scrolling = false;
       this.send({ t: "scroll", dx: 0, dy: 0, phase: PHASE.Ended, momentum: MOMENTUM.None });

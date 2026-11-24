@@ -171,6 +171,14 @@ func magnify(_ amount: Double, phase: Int64) {
 
 func smartZoom() { gestureEvent(type: 29, subtype: 22)?.post(tap: .cghidEventTap) } // kIOHIDEventTypeZoomToggle
 
+// The menu bar hides the way System Settings > Control Center > "Automatically hide and show the menu
+// bar" does: the setting, then the notice every app and the Dock act on.
+func menuBar(hidden: Bool) {
+  CFPreferencesSetValue("_HIHideMenuBar" as CFString, hidden as CFBoolean, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+  CFPreferencesAppSynchronize(kCFPreferencesAnyApplication)
+  DistributedNotificationCenter.default().postNotificationName(.init("AppleInterfaceMenuBarHidingChangedNotification"), object: nil, userInfo: nil, deliverImmediately: true)
+}
+
 /// Three/four-finger swipe: Spaces (horizontal) or Mission Control / App Exposé (vertical).
 /// delta is in "spaces": 1.0 is one full Space; the Dock animates along as it would under real fingers.
 var dockOrigin = 0.0
@@ -248,6 +256,7 @@ func handle(_ line: Substring) {
   case "scroll": scroll(d("dx"), d("dy"), phase: Int64(d("phase")), momentum: Int64(d("momentum")))
   case "magnify": magnify(d("m"), phase: Int64(d("phase")))
   case "smartzoom": smartZoom()
+  case "menubar": menuBar(hidden: m["hide"] as? Bool ?? false)
   case "dock": dockSwipe(d("d"), vertical: (m["axis"] as? String) == "v", phase: Int64(d("phase")))
   case "raw": raw(m)
   case "reset": resetAll()
