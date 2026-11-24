@@ -54,6 +54,11 @@ export class AppLink {
               if (m?.t === "screen" && ["home", "stream", "other"].includes(m.name)) this.setScreen(m.name);
               else if (m?.t === "settings") this.on.settings(m);
               else if (m?.t === "restart" && typeof m.host === "string") this.on.restart(m.host);
+              else if (m?.t === "screenshot" && typeof m.jpeg === "string") {
+                // The answer to `bun hub.ts screenshot`: what the Apple TV shows, for debugging.
+                const path = `${process.env.XDG_RUNTIME_DIR ?? "/tmp"}/sofa-app-screenshot.jpg`;
+                void Bun.write(path, Buffer.from(m.jpeg, "base64")).then(() => console.log(`app: screenshot saved to ${path}`));
+              }
             } catch {
               console.error(`app: not JSON: ${line.slice(0, 80)}`);
             }

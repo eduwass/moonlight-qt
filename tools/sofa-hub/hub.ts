@@ -28,7 +28,7 @@ const TRACKPAD = "Apple Inc. Magic Trackpad";
 
 if (process.argv[2] === "mode") {
   const wanted = process.argv[3];
-  if (!["tv", "desktop", "mac", "toggle"].includes(wanted ?? "")) throw new Error("usage: bun hub.ts mode tv|desktop|mac|toggle");
+  if (!["tv", "desktop", "mac", "toggle", "screenshot"].includes(wanted ?? "")) throw new Error("usage: bun hub.ts mode tv|desktop|mac|toggle|screenshot");
   const reply = await new Promise<string>((resolve, reject) => {
     Bun.connect({
       unix: SOCKET,
@@ -471,7 +471,8 @@ Bun.listen({
   socket: {
     data(socket, data) {
       const wanted = data.toString().trim();
-      if (wanted === "toggle") choose(mode === "tv" ? "desktop" : "tv");
+      if (wanted === "screenshot") app.send({ t: "screenshot" }); // answered on the app link, saved by applink.ts
+      else if (wanted === "toggle") choose(mode === "tv" ? "desktop" : "tv");
       else if (wanted === "tv" || wanted === "desktop" || wanted === "mac") choose(wanted);
       socket.write(`mode: ${mode}\n`);
       socket.end();
@@ -550,7 +551,9 @@ Bun.serve({
   port: Number(process.env.SOFA_SPEED_PORT ?? 47903),
   fetch(request, server) {
     const url = new URL(request.url);
-    if (!appPeers.includes(server.requestIP(request)?.address ?? "") || url.pathname !== "/speed") return new Response("no", { status: 404 });
+    // A dual-stack listener reports IPv4 peers as ::ffff:a.b.c.d.
+    const peer = (server.requestIP(request)?.address ?? "").replace(/^::ffff:/, "");
+    if (!appPeers.includes(peer) || url.pathname !== "/speed") return new Response("no", { status: 404 });
     let left = Math.min(Math.max(Number(url.searchParams.get("bytes")) || 0, 0), 100_000_000);
     const length = left;
     const body = new ReadableStream({
