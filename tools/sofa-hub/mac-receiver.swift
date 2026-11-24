@@ -188,13 +188,20 @@ func dinky(_ args: [String]) {
 }
 
 // The menu bar hides the way System Settings > Control Center > "Automatically hide and show the menu
-// bar" does: the setting, then the notice every app and the Dock act on.
+// bar" does: WindowServer's flag (which dinky reads), the setting, then the notice every app acts on;
+// without the last two, apps keep their windows below where the bar was.
+let skyLight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY)
 func menuBar(hidden: Bool) {
   print("menu bar \(hidden ? "hidden" : "shown")")
+  typealias Connection = @convention(c) () -> Int32
+  typealias SetAutohide = @convention(c) (Int32, Bool) -> Int32
+  if let conn = dlsym(skyLight, "SLSMainConnectionID"), let set = dlsym(skyLight, "SLSSetMenuBarAutohideEnabled") {
+    _ = unsafeBitCast(set, to: SetAutohide.self)(unsafeBitCast(conn, to: Connection.self)(), hidden)
+  }
   CFPreferencesSetValue("_HIHideMenuBar" as CFString, hidden as CFBoolean, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
   CFPreferencesAppSynchronize(kCFPreferencesAnyApplication)
   DistributedNotificationCenter.default().postNotificationName(.init("AppleInterfaceMenuBarHidingChangedNotification"), object: nil, userInfo: nil, deliverImmediately: true)
-  // dinky does not notice the screen growing or shrinking by the menu bar, so it lays the windows out again.
+  // Once the apps have caught up, dinky lays the windows out again over the new area.
   DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
     dinky(["retile"])
   }
