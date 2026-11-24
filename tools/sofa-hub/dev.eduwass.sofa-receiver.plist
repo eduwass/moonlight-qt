@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.eduwass.sofa-receiver</string>
+  <key>ProgramArguments</key><array><string>/Users/eduwass/.local/bin/sofa-receiver</string></array>
+  <key>EnvironmentVariables</key><dict><key>SOFA_HUB_HOST</key><string>100.77.46.114</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>/Users/eduwass/Library/Logs/sofa-receiver.log</string>
+  <key>StandardErrorPath</key><string>/Users/eduwass/Library/Logs/sofa-receiver.log</string>
+</dict>
+</plist>

@@ -1,0 +1,7 @@
+# Sofa palms on the 2024 Magic Trackpad measure 800-975 (fingers 230-450), mostly under
+# libinput default palm threshold of 900, so lower it (measured 2026-11-23).
+[Apple Magic Trackpad v2 Bluetooth (2024), sofa palm rejection]
+MatchVendor=0x004C
+MatchProduct=0x0324
+AttrPalmSizeThreshold=600
+AttrThumbSizeThreshold=500

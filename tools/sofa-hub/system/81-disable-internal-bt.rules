@@ -1,0 +1,2 @@
+# The internal Intel 7260 Bluetooth is too weak from inside the cabinet; the HOMMIE dongle outside it does the work.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="8087", ATTR{idProduct}=="07dc", ATTR{authorized}="0"
