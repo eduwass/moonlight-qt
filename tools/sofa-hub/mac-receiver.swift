@@ -1,9 +1,11 @@
 // sofa-hub's receiver on the Mac. Dials the hub on omarchypc over Tailscale, tells it when this
 // Mac's Sunshine is streaming, and replays the keys and trackpad input it gets as real Mac input.
-// Every 5 s it also sends this Mac's stats for the Sofa app's list of computers.
+// Every 5 s it also sends this Mac's stats for the Sofa app's list of computers; asked, a preview of the
+// screen (needs Screen Recording), or it restarts the Mac (fdesetup authrestart, setup-mac-restart.sh).
 // Needs Accessibility permission. Build: swiftc -O mac-receiver.swift -o ~/.local/bin/sofa-receiver
 import AppKit
 import Foundation
+import ImageIO
 import Network
 import SystemConfiguration
 
@@ -315,6 +317,8 @@ func handle(_ line: Substring) {
   case "dock": dockSwipe(d("d"), vertical: (m["axis"] as? String) == "v", phase: Int64(d("phase")))
   case "raw": raw(m)
   case "reset": resetAll()
+  case "preview": statsQueue.async { preview() }
+  case "restart": DispatchQueue.global().async { restart() }
   default: break
   }
 }
@@ -459,7 +463,105 @@ func stats() -> [String: Any] {
     "diskTotal": diskTotal,
     "uptime": uptime(),
     "apps": screenApps(),
+    "os": "macos",
+    "pressure": memoryPressure(),
   ]
+}
+
+/// The kernel's memory pressure, as Activity Monitor's graph colours it: 1 normal, 2 warn, 4 critical.
+func memoryPressure() -> String {
+  var level: Int32 = 0
+  var size = MemoryLayout<Int32>.size
+  guard sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0) == 0 else { return "normal" }
+  return level >= 4 ? "critical" : level >= 2 ? "warn" : "normal"
+}
+
+// MARK: - Preview of the screen, for the Sofa app's list of computers
+
+/// The main display as a JPEG about 640 px wide, base64, under 150 KB; or why there is none.
+func preview() {
+  guard CGPreflightScreenCaptureAccess() else {
+    _ = CGRequestScreenCaptureAccess() // puts the receiver in System Settings' Screen Recording list, to turn on
+    say("preview-failed no-permission")
+    return
+  }
+  let path = NSTemporaryDirectory() + "sofa-preview.jpg"
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  guard run("/usr/sbin/screencapture", ["-x", "-m", "-t", "jpg", path]) != nil,
+    let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+    let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+      kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 640,
+    ] as CFDictionary)
+  else { return say("preview-failed capture") }
+  // Without the permission, or with the display asleep, the picture comes back black.
+  if isBlack(image) { return say("preview-failed no-permission") }
+  for quality in [0.7, 0.5, 0.35] {
+    let data = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { break }
+    CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+    guard CGImageDestinationFinalize(dest) else { break }
+    let base64 = (data as Data).base64EncodedString()
+    if base64.count <= 150_000 { return say("preview " + base64) }
+  }
+  say("preview-failed too-big")
+}
+
+func isBlack(_ image: CGImage) -> Bool {
+  var pixels = [UInt8](repeating: 0, count: 8 * 8 * 4)
+  let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+    guard let ctx = CGContext(data: buffer.baseAddress, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32,
+                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+    ctx.draw(image, in: CGRect(x: 0, y: 0, width: 8, height: 8))
+    return true
+  }
+  return drawn && pixels.enumerated().allSatisfy { $0.offset % 4 == 3 || $0.element < 8 }
+}
+
+/// A program's output, or nil when it could not run or failed.
+func run(_ path: String, _ args: [String], input: Data? = nil) -> String? {
+  let p = Process()
+  p.executableURL = URL(fileURLWithPath: path)
+  p.arguments = args
+  let out = Pipe()
+  let inPipe = Pipe()
+  p.standardOutput = out
+  p.standardError = FileHandle.nullDevice
+  if input != nil { p.standardInput = inPipe }
+  guard (try? p.run()) != nil else { return nil }
+  if let input {
+    inPipe.fileHandleForWriting.write(input)
+    try? inPipe.fileHandleForWriting.close()
+  }
+  let data = out.fileHandleForReading.readDataToEndOfFile()
+  p.waitUntilExit()
+  return p.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
+}
+
+// MARK: - Restart, asked from the Sofa app
+
+/// Restarts through FileVault so the Mac comes back logged in: the login password is in the keychain
+/// item "sofa-receiver-login", and sudo lets this user run `fdesetup authrestart -inputplist` (both
+/// from setup-mac-restart.sh). The password never reaches the log.
+func restart() {
+  let user = NSUserName()
+  guard var password = run("/usr/bin/security", ["find-generic-password", "-s", "sofa-receiver-login", "-a", user, "-w"]) else {
+    return say("restart-failed no keychain item sofa-receiver-login; run setup-mac-restart.sh")
+  }
+  if password.hasSuffix("\n") { password.removeLast() }
+  let command = ["/usr/bin/fdesetup", "authrestart", "-inputplist"]
+  guard !password.isEmpty, run("/usr/bin/sudo", ["-n", "-l"] + command) != nil else {
+    return say("restart-failed no sudo rule for fdesetup authrestart; run setup-mac-restart.sh")
+  }
+  guard let plist = try? PropertyListSerialization.data(fromPropertyList: ["Username": user, "Password": password], format: .xml, options: 0) else {
+    return say("restart-failed plist")
+  }
+  print("restart: fdesetup authrestart, asked by the Sofa app")
+  say("restarting")
+  Thread.sleep(forTimeInterval: 0.3) // let the answer reach the hub
+  if run("/usr/bin/sudo", ["-n"] + command, input: plist) == nil {
+    print("restart: fdesetup authrestart failed")
+    say("restart-failed fdesetup authrestart failed (is FileVault on?)")
+  }
 }
 
 // MARK: - The hub connection
