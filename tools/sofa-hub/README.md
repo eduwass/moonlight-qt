@@ -171,4 +171,4 @@ bun sync.ts sync.webm [w:h:x:y]               # crop = the TV's screen in the 64
 
 Results on 2026-11-24, after the Sofa app's own audio output replaced SDL's (Limelight/Stream/Connection.m,
 30 ms cushion): both computers 0 dips; sound late ~45 ms on mbp13 and ~85 ms on omarchypc once settled. The Apple
-TV's HDMI output adds about 80 ms of its own that it compensates for.
+TV reports 80 ms of HDMI output latency, which is included in those numbers.
