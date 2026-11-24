@@ -89,7 +89,9 @@ const TRACKPAD_AXES = [0, 1, 24, 47, 48, 49, 52, 53, 54, 57, 58]; // X Y PRESSUR
 let virtualPad: VirtualDevice | null = null;
 let lastKeyAt = 0;
 
-const wantsGrab = (name: string) => mode !== "desktop" || (name === TRACKPAD && virtualPad !== null);
+const wantsGrab = (name: string) =>
+  name === KEYBOARD && escDown ? mode !== "desktop" && mode !== "tv" : mode !== "desktop" || (name === TRACKPAD && virtualPad !== null);
+const regrab = () => { for (const [name, device] of devices) device.grab(wantsGrab(name)); };
 
 function makeVirtualPad(real: InputDevice): void {
   const id = deviceId(TRACKPAD);
@@ -136,10 +138,12 @@ const macPad = new MacTrackpad((m) => mac.send(m), Number(process.env.SOFA_MAC_T
 const WAKE_AFTER_MS = 2 * 60_000;
 let lastTvKeyAt = 0;
 const ESC_HOLD_MS = 5000;
-let escDownAt = 0;
+let escDown = false;
+let escTimer: Timer | undefined;
 
 function leaveStream(): void {
   console.log("esc held: back to the Apple TV");
+  if (mode === "mac") mac.send({ t: "key", code: KEY.ESC, down: false });
   desktopStreamed = false;
   macStreamed = false;
   setMode("tv");
@@ -158,16 +162,14 @@ function onKeyboard(events: InputEvent[]): void {
     else if (value === 1) lastKeyAt = Date.now();
     if (value === 1) lastSofaInputAt = Date.now();
 
-    // Esc held ESC_HOLD_MS in a stream, then let go: back to the Apple TV, where Home leaves the Sofa
-    // app and so its stream. On the release, so the desktop has had its Esc up before the hub grabs.
-    if (code === KEY.ESC && mode !== "tv" && value !== 2) {
-      const held = value === 0 && escDownAt > 0 && Date.now() - escDownAt >= ESC_HOLD_MS;
-      escDownAt = value === 1 ? Date.now() : 0;
-      if (held) {
-        if (mode === "mac") mac.send({ t: "key", code, down: false });
-        leaveStream();
-        continue;
-      }
+    // Esc held ESC_HOLD_MS in a stream: back to the Apple TV, where Home leaves the Sofa app and so
+    // its stream. The keyboard is grabbed only once Esc is up, so the desktop never keeps it held.
+    if (code === KEY.ESC && value === 1 && mode !== "tv") {
+      escDown = true;
+      escTimer = setTimeout(leaveStream, ESC_HOLD_MS);
+    } else if (code === KEY.ESC && value === 0) {
+      clearTimeout(escTimer);
+      if (escDown) (escDown = false), regrab();
     }
 
     if (value === 1 && isModeToggle(code, mods)) {
