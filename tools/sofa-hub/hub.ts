@@ -1,7 +1,8 @@
 // sofa-hub: the sofa keyboard drives the Apple TV, omarchypc's desktop while it is streamed, or the
 // Mac while it is streamed (through mac-receiver.swift on the Mac, see mac.ts).
 // In a stream the desktop gets a copy of the trackpad with palms filtered out, touch by touch (palm.ts).
-// The trackpad only works in a stream; on the Apple TV it is held so stray touches do nothing.
+// The trackpad only works in a stream, or as the pointer on the Sofa app's home screen (applink.ts);
+// elsewhere on the Apple TV it is held so stray touches do nothing.
 // The volume keys always go to the Apple TV, which sets the TV's volume over HDMI-CEC; in a stream of
 // omarchypc the desktop gets the keyboard through the hub's own copy of it, without them.
 //
@@ -9,11 +10,13 @@
 //   bun hub.ts mode tv|desktop|mac|toggle    tell the running hub where input goes
 //   bun hub.ts pair             pair with the Apple TV once (type the PIN it shows)
 import { existsSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { AppLink } from "./applink.ts";
 import { AppleTv } from "./appletv.ts";
 import { EV_KEY, InputDevice, deviceId, findEventNode, type InputEvent } from "./evdev.ts";
 import { HID, KEY, type Modifiers, isModeToggle, keyToHid, repeats, tvVolumeKey } from "./keys.ts";
 import { MacLink, MacTrackpad } from "./mac.ts";
 import { BTN, PalmFilter } from "./palm.ts";
+import { type Host, hidBatteries, localHost, sofaDevices } from "./stats.ts";
 import { type AbsInfo, VirtualDevice } from "./uinput.ts";
 
 type Mode = "tv" | "desktop" | "mac";
@@ -57,7 +60,7 @@ function setMode(next: Mode): void {
     // Lift whatever the place input is leaving still thinks is held.
     if (mode === "desktop") virtualPad?.write(palm.reset()), liftKeys();
     if (mode === "mac") macPad.reset(), mac.send({ t: "reset" }), palm.reset();
-    if (mode === "tv") releaseAll();
+    if (mode === "tv") releaseAll(), appPad.reset(), palm.reset();
   }
   mode = next;
   for (const [name, device] of devices) device.grab(wantsGrab(name));
@@ -134,6 +137,7 @@ function onTrackpad(events: InputEvent[]): void {
   const typing = Date.now() - lastKeyAt < TYPING_MS;
   if (mode === "desktop") virtualPad?.write(palm.frame(events, typing));
   else if (mode === "mac") macPad.frame(palm.frame(events, typing));
+  else if (app.screen === "home") appPad.frame(palm.frame(events, typing));
 }
 
 // ----------------------------------------------------------------- the Mac
@@ -149,8 +153,56 @@ const mac = new MacLink(
     if (on && !macStreamed) console.log("mac: streamed, but not from the sofa; the keyboard stays on the Apple TV");
     decide();
   },
+  (host) => (macHost = { host, at: Date.now() }),
 );
 const macPad = new MacTrackpad((m) => mac.send(m), Number(process.env.SOFA_MAC_TRACKING ?? 0.6875));
+
+// ----------------------------------------------------------------- the Sofa app on the Apple TV
+// The app's list of computers shows the sofa devices' batteries and each computer's stats. On that
+// screen, with input on the Apple TV, the trackpad is the app's pointer, shaped as for the Mac; the
+// Mac-only gestures (Spaces, zoom, the menu bar) are left out.
+
+let macHost: { host: Host; at: number } | null = null;
+const MAC_STATS_STALE_MS = 20_000;
+let lastDevices = "";
+
+function sendDevices(always = false): void {
+  if (!app.connected) return;
+  const trackpad = devices.get(TRACKPAD);
+  const message = {
+    t: "devices",
+    bridge: true,
+    devices: sofaDevices(hidBatteries(), { keyboard: findEventNode("Magic Keyboard") !== null, trackpad: !!trackpad && !trackpad.closed }),
+  };
+  const json = JSON.stringify(message);
+  if (!always && json === lastDevices) return;
+  lastDevices = json;
+  app.send(message);
+}
+
+async function sendStats(): Promise<void> {
+  if (!app.connected) return;
+  try {
+    const hosts = [await localHost(process.env.SOFA_HOST_NAME ?? "omarchypc")];
+    if (macHost && Date.now() - macHost.at < MAC_STATS_STALE_MS) hosts.push(macHost.host);
+    app.send({ t: "stats", hosts });
+  } catch (error) {
+    console.error(`stats: ${(error as Error).message}`);
+  }
+}
+
+const app = new AppLink(Number(process.env.SOFA_APP_PORT ?? 47902), (process.env.SOFA_APP_PEERS ?? "192.168.68.67").split(","), {
+  connect: () => (sendDevices(true), void sendStats()),
+  screen: (screen) => {
+    if (screen !== "home") appPad.reset(), palm.reset();
+  },
+});
+const appPad = new MacTrackpad(
+  (m) => (m.t === "move" || m.t === "button" || m.t === "scroll") && app.send(m),
+  Number(process.env.SOFA_APP_TRACKING ?? 0.6875),
+);
+setInterval(sendDevices, 10_000);
+setInterval(sendStats, 5000);
 
 // ----------------------------------------------------------------- keyboard
 // In a stream of omarchypc the hub holds the keyboard too and passes every key on to the desktop through
@@ -300,7 +352,7 @@ function attach(name: string, onFrame: (events: InputEvent[]) => void, setup?: (
 
 function scan(): void {
   attach(KEYBOARD, onKeyboard);
-  attach(TRACKPAD, onTrackpad, makeVirtualPad, () => virtualPad?.write(palm.reset()));
+  attach(TRACKPAD, onTrackpad, makeVirtualPad, () => (virtualPad?.write(palm.reset()), appPad.reset()));
 }
 
 // ----------------------------------------------------------------- control socket

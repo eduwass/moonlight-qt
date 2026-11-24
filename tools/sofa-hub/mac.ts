@@ -3,8 +3,10 @@
 // Mac trackpad's would be: accelerated pointer moves, phased scrolls with momentum, two-finger
 // clicks as right clicks, and three/four-finger swipes as Spaces and Mission Control shortcuts.
 import type { Socket } from "bun";
+import { lineSplitter } from "./applink.ts";
 import { pointerCurve, RES, scrollCurve } from "./curve.ts";
 import { ABS, BTN, EV_ABS, EV_KEY } from "./palm.ts";
+import type { Host } from "./stats.ts";
 
 export type MacMessage =
   | { t: "key"; code: number; down: boolean }
@@ -30,18 +32,20 @@ const TAP_UNITS = 3 * RES;
 const TAP_TO_CLICK = process.env.SOFA_MAC_TAP === "1"; // off by default: press to click, like the MacBooks
 const RECONNECT_GRACE_MS = 10_000;
 
-/** The receiver's connection. Only peers in `allowed` may connect; one at a time. */
+/** The receiver's connection. Only peers in `allowed` may connect; one at a time. It says
+ * `streaming` or `idle` as the Mac's Sunshine changes, and `stats <json>` (a Host) every 5 s. */
 export class MacLink {
-  private socket: Socket<undefined> | null = null;
+  private socket: Socket<{ lines: (chunk: string) => string[] }> | null = null;
   private goneTimer: Timer | undefined;
 
-  constructor(hostname: string, port: number, allowed: string[], onStreaming: (on: boolean) => void) {
-    Bun.listen({
+  constructor(hostname: string, port: number, allowed: string[], onStreaming: (on: boolean) => void, onStats: (host: Host) => void = () => {}) {
+    Bun.listen<{ lines: (chunk: string) => string[] }>({
       hostname,
       port,
       socket: {
         open: (s) => {
           if (!allowed.includes(s.remoteAddress)) return void s.end();
+          s.data = { lines: lineSplitter() };
           this.socket?.end();
           this.socket = s;
           s.setNoDelay?.(true);
@@ -50,9 +54,13 @@ export class MacLink {
         },
         data: (s, data) => {
           if (s !== this.socket) return;
-          for (const line of data.toString().split("\n")) {
+          for (const line of s.data.lines(data.toString())) {
             if (line === "streaming") onStreaming(true);
             else if (line === "idle") onStreaming(false);
+            else if (line.startsWith("stats ")) {
+              const host = parseHost(line.slice(6));
+              if (host) onStats(host);
+            }
           }
         },
         close: (s) => {
@@ -69,6 +77,16 @@ export class MacLink {
 
   send(message: MacMessage): void {
     this.socket?.write(`${JSON.stringify(message)}\n`);
+  }
+}
+
+/** A Host from the receiver's JSON, or null when it is not one. */
+export function parseHost(json: string): Host | null {
+  try {
+    const h = JSON.parse(json);
+    return typeof h?.name === "string" && Array.isArray(h.apps) && Array.isArray(h.addresses) ? h : null;
+  } catch {
+    return null;
   }
 }
 
