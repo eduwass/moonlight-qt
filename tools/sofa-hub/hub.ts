@@ -540,3 +540,27 @@ if (process.env.SOFA_START_MODE) setMode(process.env.SOFA_START_MODE as Mode);
 else decide();
 followSunshine();
 console.log(`sofa-hub: listening on ${SOCKET}, mode ${mode}`);
+
+// ----------------------------------------------------------------- connection check
+// The Sofa app's "Check connection" times a download from here: the Apple TV's Wi-Fi is what limits a
+// stream from either computer, and omarchypc is wired. GET /speed?bytes=N sends N zero bytes (at most 100 MB).
+const SPEED_CHUNK = new Uint8Array(1 << 20);
+const appPeers = (process.env.SOFA_APP_PEERS ?? "192.168.68.67").split(",");
+Bun.serve({
+  port: Number(process.env.SOFA_SPEED_PORT ?? 47903),
+  fetch(request, server) {
+    const url = new URL(request.url);
+    if (!appPeers.includes(server.requestIP(request)?.address ?? "") || url.pathname !== "/speed") return new Response("no", { status: 404 });
+    let left = Math.min(Math.max(Number(url.searchParams.get("bytes")) || 0, 0), 100_000_000);
+    const length = left;
+    const body = new ReadableStream({
+      pull(controller) {
+        if (left <= 0) return controller.close();
+        const n = Math.min(left, SPEED_CHUNK.length);
+        controller.enqueue(SPEED_CHUNK.subarray(0, n));
+        left -= n;
+      },
+    });
+    return new Response(body, { headers: { "content-length": String(length), "cache-control": "no-store" } });
+  },
+});
