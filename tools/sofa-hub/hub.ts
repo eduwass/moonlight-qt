@@ -6,7 +6,7 @@
 //   bun hub.ts                  run the hub (the systemd user service does this)
 //   bun hub.ts mode tv|desktop|mac|toggle    tell the running hub where input goes
 //   bun hub.ts pair             pair with the Apple TV once (type the PIN it shows)
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, rmSync, unlinkSync } from "node:fs";
 import { AppleTv } from "./appletv.ts";
 import { EV_KEY, InputDevice, deviceId, findEventNode, type InputEvent } from "./evdev.ts";
 import { HID, KEY, type Modifiers, isModeToggle, keyToHid, repeats } from "./keys.ts";
@@ -226,6 +226,27 @@ const SUNSHINE_LOG = process.env.SOFA_SUNSHINE_LOG ?? `${process.env.HOME}/.conf
 const streamMode = (line: string): Mode | null =>
   line.includes("CLIENT CONNECTED") ? "desktop" : line.includes("CLIENT DISCONNECTED") ? "tv" : null;
 
+// The Apple TV's picture: 1080p at 1.6 (a 1200x675 desktop). Sunshine sizes the display only when a
+// stream launches the desktop; joining one already running (mbpmax's) keeps that client's size and
+// scale, and a fresh launch keeps the last scale, so the sofa sets both. Shared streams see it too.
+// The Mac launcher's sunshine-client-pointer flag (the Mac draws its own pointer, so this one is made
+// clear) is taken away too: the Apple TV draws none, and the cursor would be invisible on it.
+const TV_MODE = (process.env.SOFA_TV_MODE ?? "1920x1080@60").match(/^(\d+)x(\d+)@(\d+)$/);
+const TV_SCALE = process.env.SOFA_TV_SCALE ?? "1.6";
+
+function tvDisplay(): void {
+  if (!TV_MODE) return;
+  const run = process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
+  rmSync(`${run}/sunshine-client-pointer`, { force: true });
+  Bun.write(`${run}/sunshine-client-scale`, TV_SCALE).then(() =>
+    Bun.spawn([`${process.env.HOME}/.local/bin/sunshine-virtual-display`, "resize"], {
+      env: { ...process.env, SUNSHINE_CLIENT_WIDTH: TV_MODE[1], SUNSHINE_CLIENT_HEIGHT: TV_MODE[2], SUNSHINE_CLIENT_FPS: TV_MODE[3] },
+      stdout: "ignore",
+      stderr: "inherit",
+    }),
+  );
+}
+
 function followSunshine(): void {
   const tail = Bun.spawn(["tail", "-F", "-n", "0", SUNSHINE_LOG], { stdout: "pipe", stderr: "ignore" });
   void (async () => {
@@ -239,6 +260,7 @@ function followSunshine(): void {
         if (!next) continue;
         desktopStreamed = next === "desktop" && fromSofa();
         if (next === "desktop" && !desktopStreamed) console.log("desktop: streamed, but not from the sofa; the keyboard stays on the Apple TV");
+        if (desktopStreamed) tvDisplay();
         decide();
       }
     }
