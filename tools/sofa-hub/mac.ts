@@ -23,7 +23,9 @@ export type MacMessage =
   | { t: "tone"; seconds: number }
   | { t: "ping"; id: number }
   | { t: "speed"; addr: string; port: number; seconds: number }
-  | { t: "instantCursor"; on: boolean; client: string };
+  | { t: "instantCursor"; on: boolean; client: string }
+  | { t: "sizeTry" | "sizeKeep"; w: number; h: number }
+  | { t: "sizeCancel" };
 
 // CGScrollPhase and CGMomentumScrollPhase values.
 const PHASE = { None: 0, Began: 1, Changed: 2, Ended: 4 } as const;

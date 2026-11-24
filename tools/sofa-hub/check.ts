@@ -192,9 +192,9 @@ equal(tvVolumeKey(KEY.VOLUMEDOWN, { ...none, shift: true }), null, "with a modif
   equal(parseMode("100x100@60"), null);
   equal(pathMs([40, 10, 12, 11, 500]), 6, "half the median round trip");
   equal(pathMs([]), null);
-  deepEqual(macDisplayFacts({ pixels: [2880, 1800], scale: 2, looks: [1440, 900] }), {
-    pixels: [2880, 1800], scale: 2, looks: [1440, 900], modes: [], sizes: [], tryable: false, why: "trying sizes on the Mac isn't built yet",
-  });
+  const mac = macDisplayFacts({ pixels: [1920, 1080], scale: 2, looks: [960, 540] }, "");
+  deepEqual([mac.modes, mac.tryable, mac.perComputer, mac.sizes?.length], [[[1920, 1080]], true, true, 4]);
+  equal(macDisplayFacts({ pixels: [1920, 1080], scale: 2, looks: [960, 540] }, "streamed right now").tryable, false);
   equal(sunshineStreaming("[a]: Info: CLIENT CONNECTED\n[b]: Info: CLIENT DISCONNECTED\n"), false);
   equal(sunshineStreaming("[b]: Info: CLIENT DISCONNECTED\n[c]: Info: CLIENT CONNECTED\n[d]: Info: x"), true);
   equal(sunshineStreaming("nothing"), null);

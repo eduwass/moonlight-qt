@@ -83,6 +83,7 @@ let lastSofaInputAt = 0;
 const fromSofa = () => Date.now() - lastSofaInputAt < SOFA_CLAIM_MS;
 let desktopStreamed = false;
 let macStreamed = false;
+let macLive = false; // the Mac is being streamed, by anyone
 const KEY_B = 48; // linux/input-event-codes.h
 // The streams being watched outlive a restart of the hub (a deploy), so input stays where it was.
 // ponytail: a stream that ends while the hub is down is missed; holding Esc 5 s gets back to the Apple TV.
@@ -157,6 +158,7 @@ const mac = new MacLink(
   (process.env.SOFA_MAC_PEERS ?? "100.114.79.7").split(","), // mbp13 over Tailscale
   {
     streaming: (on) => {
+      macLive = on;
       if (!on) streamEnded();
       macStreamed = on && (macStreamed || fromSofa()); // a stream the sofa was on stays the sofa's
       if (on && !macStreamed) console.log("mac: streamed, but not from the sofa; the keyboard stays on the Apple TV");
@@ -214,7 +216,7 @@ async function sendStats(): Promise<void> {
     const hosts = [{ ...(await localHost(HOST_NAME)), ...(mode ? { display: tvDisplayFacts(mode, settings.tvScale, await sizeWhyNot()) } : {}) }];
     if (macHost && Date.now() - macHost.at < MAC_STATS_STALE_MS) {
       const { display, ...host } = macHost.host;
-      hosts.push(Array.isArray(display?.pixels) ? { ...host, display: macDisplayFacts(display!) } : host);
+      hosts.push(Array.isArray(display?.pixels) ? { ...host, display: macDisplayFacts(display!, macSizeWhyNot()) } : host);
     }
     app.send({ t: "stats", hosts: hosts.map((h) => ({ ...h, apps: shapeApps(h.apps, settings.apps) })) });
   } catch (error) {
@@ -231,7 +233,7 @@ const app = new AppLink(Number(process.env.SOFA_APP_PORT ?? 47902), (process.env
   settings: (m) => applySettings(m),
   restart: (host) => restart(host),
   request: (m) => onRequest(m),
-  gone: () => void sizes.cancel("the app went"),
+  gone: () => (void sizes.cancel("the app went"), mac.send({ t: "sizeCancel" })),
 });
 const appPad = new MacTrackpad((m) => (m.t === "move" || m.t === "button" || m.t === "scroll") && app.send(m), padOptions());
 setInterval(sendDevices, 10_000);
@@ -321,6 +323,14 @@ function restart(host: string): void {
 // The app tries omarchypc's size on the TV (only while nobody but the sofa streams it), keeps or cancels
 // it (display.ts), and plays a test tone on either computer.
 
+let macTryPixels: [number, number] | null = null; // as the app asked, so it knows the answer for its own
+
+function macSizeWhyNot(): string {
+  if (!mac.connected) return "the Mac's receiver is not connected";
+  if (macStreamed || macLive) return "streamed right now";
+  return "";
+}
+
 async function sizeWhyNot(): Promise<string> {
   if (sunshineLive && !desktopStreamed) return "streamed from another device";
   if (!(await virtualOutput())) return "no virtual output (a monitor is plugged in)";
@@ -387,8 +397,15 @@ function onRequest(m: Record<string, unknown>): void {
     return mac.send({ t: "tone", seconds });
   }
   if (!here) {
-    if (m.t === "trySize") app.send({ t: "sizePreview", host, pixels: m.pixels, looks: m.looks, error: `sizes cannot be tried on ${host} yet` });
-    return;
+    // The Mac: its receiver resizes its stream display (see mac-receiver.swift, sizes); it answers `size`.
+    if (host.toLowerCase() !== macName().toLowerCase()) return;
+    if (m.t === "cancelSize") return mac.send({ t: "sizeCancel" });
+    const why = macSizeWhyNot();
+    if (!looks) return void (m.t === "trySize" && app.send({ t: "sizePreview", host, pixels: m.pixels, looks: m.looks, error: "no such size" }));
+    if (m.t === "keepSize") return mac.send({ t: "sizeKeep", w: looks[0], h: looks[1] });
+    if (why) return app.send({ t: "sizePreview", host, pixels: m.pixels, looks, error: why });
+    macTryPixels = pixels;
+    return mac.send({ t: "sizeTry", w: looks[0], h: looks[1] });
   }
   if (m.t === "cancelSize") return void sizes.cancel("the app cancelled");
   // A size is the stream's pixels and the size the desktop looks, no bigger than them, at a scale up to 4.
@@ -419,6 +436,13 @@ function onMacLine(line: string): void {
     pendingRestart = null;
     console.log(`restart: ${host}: ${line}`);
     app.send({ t: "restart", host, ok: word === "restarting", ...(word === "restart-failed" ? { error: rest || "failed" } : {}) });
+  } else if (word === "size") {
+    // "size <w> <h> ok <base64>" or "size <w> <h> failed <why>": the answer to a try.
+    const [w, h, result, ...more] = rest.split(" ");
+    const looks = [Number(w), Number(h)];
+    const answer = { t: "sizePreview", host: macName(), pixels: macTryPixels ?? [looks[0]! * 2, looks[1]! * 2], looks };
+    if (result === "ok" && more[0] && more[0].length <= PREVIEW_MAX * 4) app.send({ ...answer, scale: 2, jpeg: more[0] });
+    else app.send({ ...answer, error: result === "ok" ? "picture too big" : more.join(" ") || "failed" });
   } else if (word === "cursor") {
     const [seq, x, y, w, h] = rest.split(" ").map(Number);
     if (settings.instantCursor && app.screen === "stream" && [seq, x, y, w, h].every(Number.isFinite)) app.send({ t: "cursorAt", seq, x, y, w, h });

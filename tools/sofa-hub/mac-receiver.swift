@@ -340,6 +340,9 @@ func handle(_ line: Substring) {
   case "ping": say("pong \(m["id"] as? Int ?? 0)") // the hub times the input path with these
   case "tone": tone(seconds: min(max(d("seconds"), 1), 30))
   case "speed": speedTest(to: m["addr"] as? String ?? "", port: Int(d("port")), seconds: min(max(d("seconds"), 1), 10))
+  case "sizeTry": sizeTry(Int(d("w")), Int(d("h")))
+  case "sizeKeep": sizeKeep(Int(d("w")), Int(d("h")))
+  case "sizeCancel": sizeCancel()
   case "instantCursor": pictureCursor(client: m["client"] as? String ?? "", inPicture: !(m["on"] as? Bool ?? true))
   default: break
   }
@@ -588,33 +591,102 @@ func preview() {
     say("preview-failed no-permission")
     return
   }
+  capture(width: 640, maxBytes: 150_000) { say($0.hasPrefix("preview ") ? $0 : "preview-failed " + $0) }
+}
+
+/// The main display as a JPEG `width` px wide under `maxBytes` of base64: "preview <base64>", or why not.
+func capture(width: Int, maxBytes: Int, _ done: @escaping (String) -> Void) {
   Task.detached {
     do {
       let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
       guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first
-      else { return say("preview-failed capture") }
+      else { return done("capture") }
       let config = SCStreamConfiguration()
-      config.width = 640
-      config.height = max(1, Int((640 * Double(display.height) / Double(max(display.width, 1))).rounded()))
+      config.width = width
+      config.height = max(1, Int((Double(width) * Double(display.height) / Double(max(display.width, 1))).rounded()))
       config.showsCursor = false
       // Plain 8-bit sRGB: the default follows the display, and its wide or 10-bit pixels came out green and striped.
       config.pixelFormat = kCVPixelFormatType_32BGRA
       config.colorSpaceName = CGColorSpace.sRGB
       let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: []), configuration: config)
       // With the display asleep the picture comes back black.
-      if isBlack(image) { return say("preview-failed asleep") }
+      if isBlack(image) { return done("asleep") }
       for quality in [0.7, 0.5, 0.35] {
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { break }
         CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { break }
         let base64 = (data as Data).base64EncodedString()
-        if base64.count <= 150_000 { return say("preview " + base64) }
+        if base64.count <= maxBytes { return done("preview " + base64) }
       }
-      say("preview-failed too-big")
+      done("too-big")
     } catch {
-      say("preview-failed no-permission")
+      done("no-permission")
     }
+  }
+}
+
+// MARK: - Sizes on the TV: how big things look on this Mac in the sofa's streams (Sofa app > Settings >
+// Try sizes). The virtual display (dotfiles' vdisplay) is resized in points through its `want` file and
+// draws at 2x; a try answers with a picture of it, keep leaves it and writes ~/.config/sunshine/sofa-looks,
+// which sunshine-display.sh applies to the sofa's next streams, cancel puts back the size from before.
+// Not while streamed: that display is the stream. Two quiet minutes cancel a try.
+
+let vdisplay = NSHomeDirectory() + "/.local/state/vdisplay"
+var sizeBefore: (Int, Int)?
+var sizeQuiet: DispatchWorkItem?
+let sizeQueue = DispatchQueue(label: "sizes")
+
+func vdisplaySize() -> (Int, Int)? {
+  let parts = ((try? String(contentsOfFile: vdisplay + "/state", encoding: .utf8)) ?? "").split(separator: " ").compactMap { Int($0) }
+  return parts.count >= 2 ? (parts[0], parts[1]) : nil
+}
+
+/// Asks vdisplay for w x h points and waits (up to 3 s) until it says so.
+func setVdisplay(_ w: Int, _ h: Int) -> Bool {
+  guard (try? "\(w) \(h)\n".write(toFile: vdisplay + "/want", atomically: true, encoding: .utf8)) != nil else { return false }
+  for _ in 0..<60 {
+    if let now = vdisplaySize(), now == (w, h) { return true }
+    Thread.sleep(forTimeInterval: 0.05)
+  }
+  return false
+}
+
+func validLooks(_ w: Int, _ h: Int) -> Bool { (800...1920).contains(w) && (450...1080).contains(h) }
+
+func sizeTry(_ w: Int, _ h: Int) {
+  sizeQueue.async {
+    let answer = { (more: String) in say("size \(w) \(h) \(more)") }
+    guard validLooks(w, h) else { return answer("failed no such size") }
+    guard !streaming else { return answer("failed streamed right now") }
+    if sizeBefore == nil { sizeBefore = vdisplaySize() }
+    sizeQuiet?.cancel()
+    let quiet = DispatchWorkItem { sizeCancel() }
+    sizeQuiet = quiet
+    sizeQueue.asyncAfter(deadline: .now() + 120, execute: quiet)
+    guard setVdisplay(w, h) else { return answer("failed the display did not take it") }
+    Thread.sleep(forTimeInterval: 0.6) // apps redraw at the new size
+    capture(width: 1920, maxBytes: 600_000) { result in answer(result.hasPrefix("preview ") ? "ok " + result.dropFirst(8) : "failed " + result) }
+  }
+}
+
+func sizeKeep(_ w: Int, _ h: Int) {
+  sizeQueue.async {
+    guard validLooks(w, h) else { return }
+    sizeQuiet?.cancel()
+    sizeBefore = nil
+    try? FileManager.default.createDirectory(atPath: NSHomeDirectory() + "/.config/sunshine", withIntermediateDirectories: true)
+    try? "\(w) \(h)\n".write(toFile: NSHomeDirectory() + "/.config/sunshine/sofa-looks", atomically: true, encoding: .utf8)
+    if !streaming { _ = setVdisplay(w, h) }
+  }
+}
+
+func sizeCancel() {
+  sizeQueue.async {
+    sizeQuiet?.cancel()
+    guard let before = sizeBefore else { return }
+    sizeBefore = nil
+    if !streaming { _ = setVdisplay(before.0, before.1) }
   }
 }
 

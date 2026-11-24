@@ -60,15 +60,25 @@ export function tvDisplayFacts(mode: TvMode, scale: number, why: string): Displa
   };
 }
 
-/** The Mac's: its main display as the receiver sees it; no sizes yet. */
-export const macDisplayFacts = (d: Display): Display => ({
+/** The Mac's text sizes: its stream display always draws at 2x, so a size is just how big it looks (points);
+ * the receiver resizes it to try one, and keeping one makes it the sofa's from the next stream. */
+export const MAC_SIZES: { label: string; looks: [number, number] }[] = [
+  { label: "Largest", looks: [960, 540] },
+  { label: "Larger", looks: [1280, 720] },
+  { label: "Balanced", looks: [1536, 864] },
+  { label: "More space", looks: [1920, 1080] },
+];
+
+/** The Mac's line in the app's display settings: its main display as the receiver sees it, its own sizes. */
+export const macDisplayFacts = (d: Display, why: string): Display => ({
   pixels: d.pixels,
   scale: d.scale,
   looks: d.looks,
-  modes: [],
-  sizes: [],
-  tryable: false,
-  why: "trying sizes on the Mac isn't built yet",
+  modes: [d.pixels],
+  sizes: MAC_SIZES,
+  tryable: !why,
+  why,
+  perComputer: true,
 });
 
 /** The input path's one-way time from round trips: half their median, rounded (null with none). */

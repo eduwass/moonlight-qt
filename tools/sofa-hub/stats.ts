@@ -36,6 +36,7 @@ export type Display = {
   sizes?: { label: string; looks: [number, number] }[];
   tryable?: boolean;
   why?: string;
+  perComputer?: boolean; // its size is its own: keeping it changes no other computer's stream
 };
 
 export type Pressure = "normal" | "warn" | "critical";
