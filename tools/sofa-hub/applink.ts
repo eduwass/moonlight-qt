@@ -25,7 +25,12 @@ export class AppLink {
   constructor(
     port: number,
     allowed: string[],
-    private readonly on: { connect: () => void; screen: (screen: AppScreen) => void },
+    private readonly on: {
+      connect: () => void;
+      screen: (screen: AppScreen) => void;
+      settings: (m: Record<string, unknown>) => void;
+      restart: (host: string) => void;
+    },
   ) {
     Bun.listen<{ lines: (chunk: string) => string[] }>({
       hostname: "0.0.0.0",
@@ -47,6 +52,8 @@ export class AppLink {
             try {
               const m = JSON.parse(line);
               if (m?.t === "screen" && ["home", "stream", "other"].includes(m.name)) this.setScreen(m.name);
+              else if (m?.t === "settings") this.on.settings(m);
+              else if (m?.t === "restart" && typeof m.host === "string") this.on.restart(m.host);
             } catch {
               console.error(`app: not JSON: ${line.slice(0, 80)}`);
             }

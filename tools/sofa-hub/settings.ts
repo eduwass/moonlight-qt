@@ -1,0 +1,63 @@
+// The Sofa app's settings: it sends them on connect and on every change, and the hub keeps the last
+// ones in ~/.config/sofa-hub/app-settings.json so they hold across restarts. parseSettings is pure.
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import type { AppsShown } from "./stats.ts";
+
+export type Settings = {
+  statsEvery: number; // seconds between stats on the app's home screen; 0 = never
+  previewsEvery: number; // seconds between screen previews there; 0 = never
+  tvScale: number; // omarchypc's desktop scale when the sofa streams it
+  trackpadSpeed: number; // macOS tracking speed, for the app's pointer and the Mac's
+  tapToClick: boolean;
+  naturalScroll: boolean;
+  volumeKeysToTV: boolean; // in a stream the volume keys go to the Apple TV, not the computer
+  apps: AppsShown;
+};
+
+export const DEFAULTS: Settings = {
+  statsEvery: 5,
+  previewsEvery: 0,
+  tvScale: Number(process.env.SOFA_TV_SCALE ?? 1.6),
+  trackpadSpeed: 0.6875,
+  tapToClick: process.env.SOFA_MAC_TAP === "1",
+  naturalScroll: true,
+  volumeKeysToTV: true,
+  apps: "titles",
+};
+
+const num = (v: unknown, min: number, max: number) => (typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? v : undefined);
+const bool = (v: unknown) => (typeof v === "boolean" ? v : undefined);
+
+/** `prev` with every well-formed field of `m` taken over; anything missing or out of range is ignored. */
+export function parseSettings(m: Record<string, unknown>, prev: Settings = DEFAULTS): Settings {
+  return {
+    statsEvery: num(m.statsEvery, 0, 3600) ?? prev.statsEvery,
+    previewsEvery: num(m.previewsEvery, 0, 86_400) ?? prev.previewsEvery,
+    tvScale: num(m.tvScale, 0.5, 4) ?? prev.tvScale,
+    trackpadSpeed: num(m.trackpadSpeed, 0, 3) ?? prev.trackpadSpeed,
+    tapToClick: bool(m.tapToClick) ?? prev.tapToClick,
+    naturalScroll: bool(m.naturalScroll) ?? prev.naturalScroll,
+    volumeKeysToTV: bool(m.volumeKeysToTV) ?? prev.volumeKeysToTV,
+    apps: m.apps === "titles" || m.apps === "names" || m.apps === "off" ? m.apps : prev.apps,
+  };
+}
+
+const FILE = `${homedir()}/.config/sofa-hub/app-settings.json`;
+
+export function loadSettings(): Settings {
+  try {
+    return parseSettings(JSON.parse(readFileSync(FILE, "utf8")));
+  } catch {
+    return DEFAULTS;
+  }
+}
+
+export function saveSettings(s: Settings): void {
+  try {
+    mkdirSync(`${homedir()}/.config/sofa-hub`, { recursive: true });
+    writeFileSync(FILE, `${JSON.stringify(s, null, 2)}\n`);
+  } catch (error) {
+    console.error(`settings: not saved: ${(error as Error).message}`);
+  }
+}

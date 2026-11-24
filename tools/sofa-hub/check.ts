@@ -85,6 +85,61 @@ equal(tvVolumeKey(KEY.VOLUMEDOWN, { ...none, shift: true }), null, "with a modif
   equal(sent.at(-1)?.t, "button", "reset lets go of the button");
 }
 
+// The app's settings, what its list of computers shows, and the pointer it configures.
+{
+  const { DEFAULTS, parseSettings } = await import("./settings.ts");
+  const { grimScale, linuxPressure, shapeApps, trimUrl } = await import("./stats.ts");
+  const { MacTrackpad } = await import("./mac.ts");
+  const { ABS, EV_ABS } = await import("./palm.ts");
+
+  const s = parseSettings({ t: "settings", statsEvery: 30, previewsEvery: 300, tvScale: 2, trackpadSpeed: 1, tapToClick: true, naturalScroll: false, volumeKeysToTV: false, apps: "names" });
+  deepEqual(s, { statsEvery: 30, previewsEvery: 300, tvScale: 2, trackpadSpeed: 1, tapToClick: true, naturalScroll: false, volumeKeysToTV: false, apps: "names" });
+  deepEqual(parseSettings({ statsEvery: -1, tvScale: "big", apps: "all", naturalScroll: 1 }, s), s, "bad fields keep what was there");
+  deepEqual(parseSettings({}), DEFAULTS);
+
+  equal(trimUrl("Recents · Paper - https://app.paper.design/"), "Recents · Paper");
+  equal(trimUrl("Docs - http://localhost:3000/a?b=c"), "Docs");
+  equal(trimUrl("A - B"), "A - B", "only an address at the end goes");
+  const apps = ["Helium — Docs - https://x.dev/", "Ghostty"];
+  deepEqual(shapeApps(apps, "titles"), ["Helium — Docs", "Ghostty"]);
+  deepEqual(shapeApps(apps, "names"), ["Helium", "Ghostty"]);
+  deepEqual(shapeApps(apps, "off"), []);
+
+  const mem = (availKb: number) => `MemTotal: 1000 kB\nMemAvailable: ${availKb} kB\n`;
+  equal(linuxPressure("some avg10=0.00 avg60=0.00 avg300=0.00 total=1\nfull avg10=0.00", mem(500)), "normal");
+  equal(linuxPressure("some avg10=12.50 avg60=1.00 avg300=0.00 total=1", mem(500)), "warn");
+  equal(linuxPressure("some avg10=31.00 avg60=1.00 avg300=0.00 total=1", mem(500)), "critical");
+  equal(linuxPressure("some avg10=0.00", mem(90)), "critical", "under a tenth available");
+  equal(linuxPressure("", ""), "normal", "no PSI, no meminfo");
+
+  equal(grimScale([{ width: 1920, height: 1080, scale: 1.6, x: 0 }]), 640 / 1200, "a 1200 px wide layout to 640");
+  equal(grimScale([{ width: 1920, height: 1080, scale: 1, x: 0 }, { width: 1920, height: 1080, scale: 1, x: 1920 }]), 640 / 3840);
+  equal(grimScale([{ width: 320, height: 200, scale: 1, x: 0 }]), 1, "never larger than the screen");
+
+  const a = (code: number, value: number) => ({ type: EV_ABS, code, value });
+  const twoFingerScroll = (pad: InstanceType<typeof MacTrackpad>) => {
+    pad.frame([a(ABS.MT_SLOT, 0), a(ABS.MT_TRACKING_ID, 1), a(ABS.MT_POSITION_X, 100), a(ABS.MT_POSITION_Y, 100), a(ABS.MT_SLOT, 1), a(ABS.MT_TRACKING_ID, 2), a(ABS.MT_POSITION_X, 600), a(ABS.MT_POSITION_Y, 100)], 0);
+    for (let i = 1; i <= 5; i++) pad.frame([a(ABS.MT_SLOT, 0), a(ABS.MT_POSITION_Y, 100 + 60 * i), a(ABS.MT_SLOT, 1), a(ABS.MT_POSITION_Y, 100 + 60 * i)], 10 * i);
+  };
+  const scrolls = (naturalScroll: boolean) => {
+    const sent: { t: string; dy?: number }[] = [];
+    twoFingerScroll(new MacTrackpad((m) => sent.push(m), { naturalScroll }));
+    return sent.filter((m) => m.t === "scroll").map((m) => Math.sign(m.dy ?? 0));
+  };
+  equal(scrolls(true).at(-1), 1, "natural: the content follows the fingers down");
+  equal(scrolls(false).at(-1), -1, "not natural: the other way");
+
+  const taps = (tapToClick: boolean) => {
+    const sent: { t: string }[] = [];
+    const pad = new MacTrackpad((m) => sent.push(m), { tapToClick });
+    pad.frame([a(ABS.MT_SLOT, 0), a(ABS.MT_TRACKING_ID, 1), a(ABS.MT_POSITION_X, 100), a(ABS.MT_POSITION_Y, 100)], 0);
+    pad.frame([a(ABS.MT_TRACKING_ID, -1)], 50);
+    return sent.filter((m) => m.t === "button").length;
+  };
+  equal(taps(false), 0, "press to click: a tap does nothing");
+  equal(taps(true), 2, "tap to click: a tap is a click, down and up");
+}
+
 // Palm rejection, touch by touch.
 {
   const { ABS, BTN, EV_ABS, EV_KEY, PalmFilter } = await import("./palm.ts");

@@ -3,8 +3,9 @@
 // In a stream the desktop gets a copy of the trackpad with palms filtered out, touch by touch (palm.ts).
 // The trackpad only works in a stream, or as the pointer on the Sofa app's home screen (applink.ts);
 // elsewhere on the Apple TV it is held so stray touches do nothing.
-// The volume keys always go to the Apple TV, which sets the TV's volume over HDMI-CEC; in a stream of
-// omarchypc the desktop gets the keyboard through the hub's own copy of it, without them.
+// The volume keys go to the Apple TV, which sets the TV's volume over HDMI-CEC; in a stream of omarchypc
+// the desktop gets the keyboard through the hub's own copy of it, without them. The Sofa app can turn
+// that off, and sets the trackpad, the stats and previews it gets, and restarts computers (settings.ts).
 //
 //   bun hub.ts                  run the hub (the systemd user service does this)
 //   bun hub.ts mode tv|desktop|mac|toggle    tell the running hub where input goes
@@ -16,7 +17,8 @@ import { EV_KEY, InputDevice, deviceId, findEventNode, type InputEvent } from ".
 import { HID, KEY, type Modifiers, isModeToggle, keyToHid, repeats, tvVolumeKey } from "./keys.ts";
 import { MacLink, MacTrackpad } from "./mac.ts";
 import { BTN, PalmFilter } from "./palm.ts";
-import { type Host, hidBatteries, localHost, sofaDevices } from "./stats.ts";
+import { loadSettings, parseSettings, saveSettings } from "./settings.ts";
+import { type Host, PREVIEW_MAX, hidBatteries, localHost, localPreview, shapeApps, sofaDevices } from "./stats.ts";
 import { type AbsInfo, VirtualDevice } from "./uinput.ts";
 
 type Mode = "tv" | "desktop" | "mac";
@@ -50,6 +52,7 @@ if (process.argv[2] === "pair") {
   process.exit(0);
 }
 let mode: Mode = "desktop"; // until the start-up decides
+let settings = loadSettings();
 const devices = new Map<string, InputDevice>();
 const mods: Modifiers = { meta: false, ctrl: false, alt: false, shift: false };
 const held = new Map<number, number>(); // key code -> Apple TV button it pressed
@@ -107,7 +110,7 @@ let virtualPad: VirtualDevice | null = null;
 let lastKeyAt = 0;
 
 const wantsGrab = (name: string) =>
-  name === KEYBOARD && virtualKeys
+  name === KEYBOARD && keyCopy()
     ? true // the desktop gets the keyboard through virtualKeys
     : name === KEYBOARD && escDown
       ? mode !== "desktop" && mode !== "tv"
@@ -147,15 +150,20 @@ const mac = new MacLink(
   process.env.SOFA_MAC_LISTEN ?? (tailscaleIp || "127.0.0.1"),
   Number(process.env.SOFA_MAC_PORT ?? 47901),
   (process.env.SOFA_MAC_PEERS ?? "100.114.79.7").split(","), // mbp13 over Tailscale
-  (on) => {
-    if (!on) streamEnded();
-    macStreamed = on && (macStreamed || fromSofa()); // a stream the sofa was on stays the sofa's
-    if (on && !macStreamed) console.log("mac: streamed, but not from the sofa; the keyboard stays on the Apple TV");
-    decide();
+  {
+    streaming: (on) => {
+      if (!on) streamEnded();
+      macStreamed = on && (macStreamed || fromSofa()); // a stream the sofa was on stays the sofa's
+      if (on && !macStreamed) console.log("mac: streamed, but not from the sofa; the keyboard stays on the Apple TV");
+      decide();
+    },
+    stats: (host) => (macHost = { host, at: Date.now() }),
+    presence: () => sendHello(),
+    line: (line) => onMacLine(line),
   },
-  (host) => (macHost = { host, at: Date.now() }),
 );
-const macPad = new MacTrackpad((m) => mac.send(m), Number(process.env.SOFA_MAC_TRACKING ?? 0.6875));
+const padOptions = () => ({ tracking: settings.trackpadSpeed, tapToClick: settings.tapToClick, naturalScroll: settings.naturalScroll });
+const macPad = new MacTrackpad((m) => mac.send(m), padOptions());
 
 // ----------------------------------------------------------------- the Sofa app on the Apple TV
 // The app's list of computers shows the sofa devices' batteries and each computer's stats. On that
@@ -183,26 +191,123 @@ function sendDevices(always = false): void {
 async function sendStats(): Promise<void> {
   if (!app.connected) return;
   try {
-    const hosts = [await localHost(process.env.SOFA_HOST_NAME ?? "omarchypc")];
+    const hosts = [await localHost(HOST_NAME)];
     if (macHost && Date.now() - macHost.at < MAC_STATS_STALE_MS) hosts.push(macHost.host);
-    app.send({ t: "stats", hosts });
+    app.send({ t: "stats", hosts: hosts.map((h) => ({ ...h, apps: shapeApps(h.apps, settings.apps) })) });
   } catch (error) {
     console.error(`stats: ${(error as Error).message}`);
   }
 }
 
 const app = new AppLink(Number(process.env.SOFA_APP_PORT ?? 47902), (process.env.SOFA_APP_PEERS ?? "192.168.68.67").split(","), {
-  connect: () => (sendDevices(true), void sendStats()),
+  connect: () => ((lastPreviewAt = 0), sendHello(), sendDevices(true)),
   screen: (screen) => {
     if (screen !== "home") appPad.reset(), palm.reset();
+    homeTimers(true);
   },
+  settings: (m) => applySettings(m),
+  restart: (host) => restart(host),
 });
-const appPad = new MacTrackpad(
-  (m) => (m.t === "move" || m.t === "button" || m.t === "scroll") && app.send(m),
-  Number(process.env.SOFA_APP_TRACKING ?? 0.6875),
-);
+const appPad = new MacTrackpad((m) => (m.t === "move" || m.t === "button" || m.t === "scroll") && app.send(m), padOptions());
 setInterval(sendDevices, 10_000);
-setInterval(sendStats, 5000);
+
+const HOST_NAME = process.env.SOFA_HOST_NAME ?? "omarchypc";
+const macName = () => macHost?.host.name ?? "MBP13";
+const VERSION = (() => {
+  try {
+    return readFileSync(`${import.meta.dir}/VERSION`, "utf8").trim() || "dev"; // install-omarchy.sh writes it
+  } catch {
+    return "dev";
+  }
+})();
+const sendHello = () => app.send({ t: "hello", version: VERSION, receiver: mac.connected, hubUptime: Math.round(process.uptime()) });
+
+const logged = new Set<string>();
+const logOnce = (text: string) => void (logged.has(text) || (logged.add(text), console.error(text)));
+
+// Stats and previews go only to the app's home screen, the list of computers: once on arriving there
+// (a preview only if the last is older than its interval), then every statsEvery / previewsEvery s.
+let statsTimer: Timer | undefined;
+let previewTimer: Timer | undefined;
+let lastPreviewAt = 0;
+
+function homeTimers(arriving = false): void {
+  clearInterval(statsTimer);
+  clearInterval(previewTimer);
+  statsTimer = previewTimer = undefined;
+  if (!app.connected || app.screen !== "home") return;
+  const { statsEvery, previewsEvery } = settings;
+  if (statsEvery > 0) statsTimer = setInterval(sendStats, statsEvery * 1000);
+  if (previewsEvery > 0) previewTimer = setInterval(sendPreviews, previewsEvery * 1000);
+  if (arriving && statsEvery > 0) void sendStats();
+  if (arriving && previewsEvery > 0 && Date.now() - lastPreviewAt > previewsEvery * 1000) void sendPreviews();
+}
+
+async function sendPreviews(): Promise<void> {
+  lastPreviewAt = Date.now();
+  if (mac.connected) mac.send({ t: "preview" }); // the receiver answers `preview <base64>`, onMacLine
+  try {
+    app.send({ t: "preview", host: HOST_NAME, jpeg: await localPreview(), at: Math.round(Date.now() / 1000) });
+  } catch (error) {
+    logOnce(`preview: ${(error as Error).message}`);
+  }
+}
+
+function applySettings(m: Record<string, unknown>): void {
+  const prev = settings;
+  settings = parseSettings(m, prev);
+  if (JSON.stringify(prev) === JSON.stringify(settings)) return;
+  console.log(`settings: ${JSON.stringify(settings)}`);
+  saveSettings(settings);
+  macPad.configure(padOptions());
+  appPad.configure(padOptions());
+  if (prev.volumeKeysToTV !== settings.volumeKeysToTV) {
+    if (!keyCopy()) liftKeys(); // the desktop reads keyd's keyboard itself again
+    regrab();
+  }
+  if (prev.statsEvery !== settings.statsEvery || prev.previewsEvery !== settings.previewsEvery) homeTimers();
+}
+
+// Restarting from the app: omarchypc reboots itself (logind lets the session's user; its disk unlocks
+// and it logs in on its own), the Mac through its receiver (fdesetup authrestart, setup-mac-restart.sh).
+let pendingRestart: { host: string; timer: Timer } | null = null;
+
+function restart(host: string): void {
+  const reply = (ok: boolean, error?: string) => app.send({ t: "restart", host, ok, ...(error ? { error } : {}) });
+  if (host.toLowerCase() === HOST_NAME.toLowerCase()) {
+    const login1 = ["org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager"];
+    const can = Bun.spawnSync(["busctl", "call", ...login1, "CanReboot"]).stdout.toString().trim();
+    if (can !== 's "yes"') return reply(false, `reboot needs a password here (CanReboot: ${can || "no answer"})`);
+    console.log(`restart: rebooting ${HOST_NAME}, asked by the Sofa app`);
+    reply(true);
+    setTimeout(() => Bun.spawn(["systemctl", "reboot"], { stdout: "ignore", stderr: "inherit" }), 500);
+    return;
+  }
+  if (host.toLowerCase() !== macName().toLowerCase()) return reply(false, `no computer called ${host}`);
+  if (!mac.connected) return reply(false, "the Mac's receiver is not connected");
+  clearTimeout(pendingRestart?.timer);
+  pendingRestart = { host, timer: setTimeout(() => ((pendingRestart = null), reply(false, "no answer from the Mac")), 15_000) };
+  console.log(`restart: asking ${host} to restart`);
+  mac.send({ t: "restart" });
+}
+
+/** The receiver's answers: `preview <base64>`, `preview-failed <why>`, `restarting`, `restart-failed <why>`. */
+function onMacLine(line: string): void {
+  const space = line.indexOf(" ");
+  const [word, rest] = space < 0 ? [line, ""] : [line.slice(0, space), line.slice(space + 1)];
+  if (word === "preview") {
+    if (rest.length > PREVIEW_MAX) return logOnce(`mac preview too big: ${rest.length} bytes`);
+    app.send({ t: "preview", host: macName(), jpeg: rest, at: Math.round(Date.now() / 1000) });
+  } else if (word === "preview-failed") {
+    logOnce(`mac preview: ${rest}${rest === "no-permission" ? " (give ~/.local/bin/sofa-receiver Screen Recording)" : ""}`);
+  } else if (word === "restarting" || word === "restart-failed") {
+    const host = pendingRestart?.host ?? macName();
+    clearTimeout(pendingRestart?.timer);
+    pendingRestart = null;
+    console.log(`restart: ${host}: ${line}`);
+    app.send({ t: "restart", host, ok: word === "restarting", ...(word === "restart-failed" ? { error: rest || "failed" } : {}) });
+  }
+}
 
 // ----------------------------------------------------------------- keyboard
 // In a stream of omarchypc the hub holds the keyboard too and passes every key on to the desktop through
@@ -221,6 +326,8 @@ const virtualKeys = (() => {
   }
 })();
 const keysDown = new Set<number>(); // what the desktop has seen pressed through the copy
+// Only while the volume keys go to the Apple TV; otherwise the desktop reads keyd's keyboard itself.
+const keyCopy = () => virtualKeys !== null && settings.volumeKeysToTV;
 
 function passKey(code: number, value: number): void {
   if (!virtualKeys || (value !== 1 && !keysDown.has(code))) return; // never an up or repeat for a key it did not see go down
@@ -300,14 +407,15 @@ function onKeyboard(events: InputEvent[]): void {
       choose(mode === "tv" ? "desktop" : "tv");
       continue;
     }
-    // In a stream the volume keys still go to the Apple TV, below; everything else to the computer.
-    const volume = mode === "tv" ? null : tvVolumeKey(code, mods);
+    // In a stream the volume keys still go to the Apple TV, below (unless the app says not to);
+    // everything else to the computer.
+    const volume = mode === "tv" || !settings.volumeKeysToTV ? null : tvVolumeKey(code, mods);
     if (mode === "mac" && volume === null) {
       if (value !== 2) mac.send({ t: "key", code, down }); // the Mac repeats held keys itself, at its own speed
       continue;
     }
     if (mode === "desktop" && volume === null) {
-      passKey(code, value);
+      if (keyCopy()) passKey(code, value);
       continue;
     }
 
@@ -379,19 +487,18 @@ const SUNSHINE_LOG = process.env.SOFA_SUNSHINE_LOG ?? `${process.env.HOME}/.conf
 const streamMode = (line: string): Mode | null =>
   line.includes("CLIENT CONNECTED") ? "desktop" : line.includes("CLIENT DISCONNECTED") ? "tv" : null;
 
-// The Apple TV's picture: 1080p at 1.6 (a 1200x675 desktop). Sunshine sizes the display only when a
+// The Apple TV's picture: 1080p at the app's tvScale, 1.6 by default (a 1200x675 desktop). Sunshine sizes the display only when a
 // stream launches the desktop; joining one already running (mbpmax's) keeps that client's size and
 // scale, and a fresh launch keeps the last scale, so the sofa sets both. Shared streams see it too.
 // The Mac launcher's sunshine-client-pointer flag (the Mac draws its own pointer, so this one is made
 // clear) is taken away too: the Apple TV draws none, and the cursor would be invisible on it.
 const TV_MODE = (process.env.SOFA_TV_MODE ?? "1920x1080@60").match(/^(\d+)x(\d+)@(\d+)$/);
-const TV_SCALE = process.env.SOFA_TV_SCALE ?? "1.6";
 
 function tvDisplay(): void {
   if (!TV_MODE) return;
   const run = process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
   rmSync(`${run}/sunshine-client-pointer`, { force: true });
-  Bun.write(`${run}/sunshine-client-scale`, TV_SCALE).then(() =>
+  Bun.write(`${run}/sunshine-client-scale`, String(settings.tvScale)).then(() =>
     Bun.spawn([`${process.env.HOME}/.local/bin/sunshine-virtual-display`, "resize"], {
       env: { ...process.env, SUNSHINE_CLIENT_WIDTH: TV_MODE[1], SUNSHINE_CLIENT_HEIGHT: TV_MODE[2], SUNSHINE_CLIENT_FPS: TV_MODE[3] },
       stdout: "ignore",

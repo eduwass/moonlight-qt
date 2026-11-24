@@ -17,7 +17,12 @@ export type Host = {
   diskTotal: number;
   uptime: number; // seconds
   apps: string[]; // what is on screen, most recently used first
+  os: "linux" | "macos";
+  pressure: Pressure;
 };
+
+export type Pressure = "normal" | "warn" | "critical";
+export type AppsShown = "titles" | "names" | "off";
 
 export type Device = { kind: "keyboard" | "trackpad"; name: string; connected: boolean; battery: number | null };
 
@@ -40,6 +45,24 @@ export function memory(meminfo: string): { memUsed: number; memTotal: number; sw
     swapUsed: kb("SwapTotal") - kb("SwapFree"),
     swapTotal: kb("SwapTotal"),
   };
+}
+
+/** Memory pressure from /proc/pressure/memory's "some avg10" (the share of the last 10 s a task waited on
+ * memory) and how much is still available: warn over 10%, critical over 30% or under a tenth available. */
+export function linuxPressure(psi: string, meminfo: string): Pressure {
+  const some = Number(psi.match(/^some avg10=([\d.]+)/m)?.[1] ?? 0);
+  const { memUsed, memTotal } = memory(meminfo);
+  if (some > 30 || (memTotal > 0 && memTotal - memUsed < memTotal / 10)) return "critical";
+  return some > 10 ? "warn" : "normal";
+}
+
+/** A browser title without the page's address Helium adds at its end ("Docs - https://…"). */
+export const trimUrl = (title: string) => title.replace(/ - https?:\/\/\S*$/, "");
+
+/** The apps line as the Sofa app asked: with the browser's tab ("Helium — Docs"), names only, or none. */
+export function shapeApps(apps: string[], shown: AppsShown): string[] {
+  if (shown === "off") return [];
+  return apps.map((a) => (shown === "names" ? (a.split(" — ")[0] ?? a) : trimUrl(a)));
 }
 
 /** The LAN and Tailscale IPv4 addresses; container bridges are left out. */
@@ -141,5 +164,69 @@ export async function localHost(name: string): Promise<Host> {
     diskTotal: fs.blocks * fs.bsize,
     uptime: Math.round(Number(readFileSync("/proc/uptime", "utf8").split(" ")[0])),
     apps: await hyprlandApps(),
+    os: "linux",
+    pressure: linuxPressure(readText("/proc/pressure/memory"), readText("/proc/meminfo")),
   };
 }
+
+const readText = (path: string) => {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+};
+
+// ----------------------------------------------------------------- previews
+
+type Monitor = { width: number; height: number; scale: number; x: number; disabled?: boolean };
+
+/** grim's -s factor for an image about `width` px wide of the whole layout (monitors in logical px). */
+export function grimScale(monitors: Monitor[], width = 640): number {
+  const on = monitors.filter((m) => !m.disabled && m.scale > 0);
+  if (!on.length) return 0.5;
+  const left = Math.min(...on.map((m) => m.x));
+  const right = Math.max(...on.map((m) => m.x + m.width / m.scale));
+  return Math.min(1, width / Math.max(1, right - left));
+}
+
+/** Wayland's socket for a service started outside the session: the newest wayland-N in the runtime dir. */
+function waylandEnv(): Record<string, string | undefined> {
+  const env = hyprlandEnv();
+  if (env.WAYLAND_DISPLAY) return env;
+  const dir = env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
+  try {
+    const newest = readdirSync(dir)
+      .filter((n) => /^wayland-\d+$/.test(n))
+      .sort((a, b) => statSync(`${dir}/${b}`).mtimeMs - statSync(`${dir}/${a}`).mtimeMs)[0];
+    return { ...env, XDG_RUNTIME_DIR: dir, ...(newest ? { WAYLAND_DISPLAY: newest } : {}) };
+  } catch {
+    return env;
+  }
+}
+
+async function run(cmd: string[], env: Record<string, string | undefined>, ms: number): Promise<Uint8Array | null> {
+  const p = Bun.spawn(cmd, { env, stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => p.kill(), ms);
+  const [out, err, code] = await Promise.all([new Response(p.stdout).bytes(), new Response(p.stderr).text(), p.exited]);
+  clearTimeout(timer);
+  if (code !== 0) throw new Error(`${cmd[0]}: ${err.trim() || `exit ${code}`}`);
+  return out;
+}
+
+/** omarchypc's whole screen as a JPEG about 640 px wide, base64, for the Sofa app's list of computers. */
+export async function localPreview(): Promise<string> {
+  const env = waylandEnv();
+  let scale = 0.5;
+  try {
+    scale = grimScale(JSON.parse(new TextDecoder().decode((await run(["hyprctl", "monitors", "-j"], env, 2000))!)));
+  } catch {}
+  for (const quality of [70, 50, 35]) {
+    const jpeg = await run(["grim", "-t", "jpeg", "-q", String(quality), "-s", scale.toFixed(4), "-"], env, 5000);
+    const b64 = Buffer.from(jpeg!).toString("base64");
+    if (b64.length <= PREVIEW_MAX) return b64;
+  }
+  throw new Error("preview too big");
+}
+
+export const PREVIEW_MAX = 150_000;

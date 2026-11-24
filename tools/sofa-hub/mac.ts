@@ -17,7 +17,9 @@ export type MacMessage =
   | { t: "smartzoom" }
   | { t: "menubar"; hide: boolean }
   | { t: "dock"; d: number; axis: "h" | "v"; phase: number }
-  | { t: "reset" };
+  | { t: "reset" }
+  | { t: "preview" }
+  | { t: "restart" };
 
 // CGScrollPhase and CGMomentumScrollPhase values.
 const PHASE = { None: 0, Began: 1, Changed: 2, Ended: 4 } as const;
@@ -29,16 +31,27 @@ const HID_PHASE = { Began: 1, Changed: 2, Ended: 4 } as const;
 const DOUBLE_TAP_MS = 400;
 const TAP_MS = 200; // a touch shorter than this, that barely moved, is a tap: one finger clicks, two right-click
 const TAP_UNITS = 3 * RES;
-const TAP_TO_CLICK = process.env.SOFA_MAC_TAP === "1"; // off by default: press to click, like the MacBooks
 const RECONNECT_GRACE_MS = 10_000;
 
 /** The receiver's connection. Only peers in `allowed` may connect; one at a time. It says
- * `streaming` or `idle` as the Mac's Sunshine changes, and `stats <json>` (a Host) every 5 s. */
+ * `streaming` or `idle` as the Mac's Sunshine changes, and `stats <json>` (a Host) every 5 s; any
+ * other line (answers to `preview` and `restart`) goes to `on.line`. */
 export class MacLink {
   private socket: Socket<{ lines: (chunk: string) => string[] }> | null = null;
   private goneTimer: Timer | undefined;
 
-  constructor(hostname: string, port: number, allowed: string[], onStreaming: (on: boolean) => void, onStats: (host: Host) => void = () => {}) {
+  constructor(
+    hostname: string,
+    port: number,
+    allowed: string[],
+    private readonly on: {
+      streaming: (on: boolean) => void;
+      stats: (host: Host) => void;
+      presence: (connected: boolean) => void;
+      line: (line: string) => void;
+    },
+  ) {
+    const onStreaming = on.streaming;
     Bun.listen<{ lines: (chunk: string) => string[] }>({
       hostname,
       port,
@@ -51,6 +64,7 @@ export class MacLink {
           s.setNoDelay?.(true);
           clearTimeout(this.goneTimer);
           console.log(`mac: receiver connected from ${s.remoteAddress}`);
+          on.presence(true);
         },
         data: (s, data) => {
           if (s !== this.socket) return;
@@ -59,14 +73,15 @@ export class MacLink {
             else if (line === "idle") onStreaming(false);
             else if (line.startsWith("stats ")) {
               const host = parseHost(line.slice(6));
-              if (host) onStats(host);
-            }
+              if (host) on.stats(host);
+            } else on.line(line);
           }
         },
         close: (s) => {
           if (s !== this.socket) return;
           this.socket = null;
           console.log("mac: receiver gone");
+          on.presence(false);
           // A receiver restarting (a deploy, a Wi-Fi blip) is back within seconds and says where the
           // stream is; only one that stays away ends it.
           this.goneTimer = setTimeout(() => onStreaming(false), RECONNECT_GRACE_MS);
@@ -75,10 +90,16 @@ export class MacLink {
     });
   }
 
+  get connected(): boolean {
+    return this.socket !== null;
+  }
+
   send(message: MacMessage): void {
     this.socket?.write(`${JSON.stringify(message)}\n`);
   }
 }
+
+export type PadOptions = { tracking: number; tapToClick: boolean; naturalScroll: boolean };
 
 /** A Host from the receiver's JSON, or null when it is not one. */
 export function parseHost(json: string): Host | null {
@@ -105,16 +126,24 @@ export class MacTrackpad {
   private two: { mode: "scroll" | "pinch" | null; start: number; last: number; moved: number } | null = null;
   private lastTwoFingerTap = 0;
   private touch: { start: number; fingers: number; travel: number; clicked: boolean } | null = null;
-  private readonly pointer: (s: number) => number;
+  private pointer: (s: number) => number = () => 0;
   private readonly scroll: (s: number) => number;
+  private options: PadOptions = { tracking: -1, tapToClick: false, naturalScroll: true };
 
   constructor(
     private readonly send: (m: MacMessage) => void,
-    tracking = 0.6875,
+    options: Partial<PadOptions> = {},
     scrollBase = 4, // points per mm of finger travel at rest
   ) {
-    this.pointer = pointerCurve(tracking, 1);
+    this.configure({ tracking: 0.6875, ...options });
     this.scroll = scrollCurve(scrollBase);
+  }
+
+  /** Tracking speed (macOS's 0-3 scale), tap to click (else press to click, like the MacBooks), natural scrolling. */
+  configure(options: Partial<PadOptions>): void {
+    const next = { ...this.options, ...options };
+    if (next.tracking !== this.options.tracking) this.pointer = pointerCurve(next.tracking, 1);
+    this.options = next;
   }
 
   frame(events: { type: number; code: number; value: number }[], now = performance.now()): void {
@@ -183,8 +212,8 @@ export class MacTrackpad {
       two.last = spread;
       return;
     }
-    // Natural scrolling: the content follows the fingers.
-    const gain = this.scroll(speed) / speed;
+    // Natural scrolling: the content follows the fingers; without it, it goes the other way.
+    const gain = ((this.options.naturalScroll ? 1 : -1) * this.scroll(speed)) / speed;
     const sx = dx * gain;
     const sy = dy * gain;
     this.velocity = { x: 0.7 * this.velocity.x + 0.3 * (sx / dt), y: 0.7 * this.velocity.y + 0.3 * (sy / dt) };
@@ -225,7 +254,7 @@ export class MacTrackpad {
       if (now - this.lastTwoFingerTap < DOUBLE_TAP_MS) return (this.lastTwoFingerTap = 0), this.send({ t: "smartzoom" });
       this.lastTwoFingerTap = now;
     }
-    if (!TAP_TO_CLICK) return;
+    if (!this.options.tapToClick) return;
     const b = t.fingers === 2 ? "right" : "left";
     this.send({ t: "button", b, down: true });
     this.send({ t: "button", b, down: false });
