@@ -37,13 +37,28 @@ export class AppleTv {
     return device;
   }
 
+  // Where the Apple TV was last found. Looking it up takes 2 s of listening on the network, and the Apple TV
+  // drops an idle connection after about 30 s, so a reconnect tries the known place first and looks it up
+  // afresh only when that fails (its remote service moves to a new port when it restarts).
+  private device: any = null;
+
   private async connect(): Promise<void> {
     this.protocol?.disconnect?.("reconnecting").catch(() => {});
     this.protocol = null;
     const storage = new JsonStorage();
-    // Look the Apple TV up afresh each time: its remote service moves to a new port when it restarts.
-    const protocol = new CompanionProtocol(await this.find(), storage, await storage.getClientDeviceInfo());
-    await protocol.connect({ transportOptions: { timeout: 10_000, autoReconnect: false } });
+    const open = async (device: any, timeout: number) => {
+      const p = new CompanionProtocol(device, storage, await storage.getClientDeviceInfo());
+      await p.connect({ transportOptions: { timeout, autoReconnect: false } });
+      return p;
+    };
+    const known = this.device;
+    let protocol;
+    try {
+      protocol = known ? await open(known, 3_000) : await open((this.device = await this.find()), 10_000);
+    } catch (error) {
+      if (!known) throw error;
+      protocol = await open((this.device = await this.find()), 10_000);
+    }
     this.protocol = protocol;
     console.log(`apple tv: connected to ${this.name}`);
   }

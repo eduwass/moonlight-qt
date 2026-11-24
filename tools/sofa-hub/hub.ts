@@ -157,6 +157,7 @@ let escDown = false;
 let escTimer: Timer | undefined;
 let escTaps: number[] = [];
 let homeFallback: Timer | undefined;
+let leaving = false; // between a leave and the stream's end
 const press = (hid: number) => void tv.button(hid, true).then(() => tv.button(hid, false));
 
 // Back to the Apple TV: Menu, which the Sofa app takes as "leave the stream" and so lands on its list of
@@ -168,11 +169,19 @@ function leaveStream(why: string): void {
   desktopStreamed = false;
   macStreamed = false;
   decide();
-  press(HID.Menu);
   clearTimeout(homeFallback);
-  homeFallback = setTimeout(() => (console.log("stream still up after Menu: Home"), press(HID.Home)), 2500);
+  leaving = true;
+  // The wait starts once Menu has reached the Apple TV, which may first need to reconnect.
+  void tv.button(HID.Menu, true).then(() => tv.button(HID.Menu, false)).then(() => {
+    console.log("apple tv: Menu sent");
+    if (!leaving) return; // the stream ended already
+    homeFallback = setTimeout(() => (console.log("stream still up after Menu: Home"), press(HID.Home)), 2500);
+  });
 }
-const streamEnded = () => clearTimeout(homeFallback);
+const streamEnded = () => {
+  leaving = false;
+  clearTimeout(homeFallback);
+};
 
 function onKeyboard(events: InputEvent[]): void {
   for (const { type, code, value } of events) {
@@ -190,6 +199,7 @@ function onKeyboard(events: InputEvent[]): void {
     // is grabbed only once Esc is up, so the desktop never keeps it held.
     if (code === KEY.ESC && value === 1 && mode !== "tv") {
       escDown = true;
+      void tv.ready().catch(() => {}); // the Apple TV link idles out after ~30 s: have it back before the third tap
       escTimer = setTimeout(() => leaveStream("esc held"), ESC_HOLD_MS);
       const now = Date.now();
       escTaps = [...escTaps.filter((t) => now - t < ESC_TAPS_MS), now];
