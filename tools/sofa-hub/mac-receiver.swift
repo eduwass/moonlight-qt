@@ -30,6 +30,10 @@ let modifierFlag: [Int: CGEventFlags] = [
 let mediaKey: [Int: Int32] = [113: 7, 114: 1, 115: 0, 163: 17, 164: 16, 165: 18]
 
 var flags: CGEventFlags = []
+// Right cmd + 1-5 is alt-shift + 1-5 here, as Karabiner makes it on a Mac's own keyboard (dinky moves the
+// window to that workspace); Karabiner never sees these synthetic keys.
+var rightCmd = false
+let workspaceDigits: Set<Int> = [2, 3, 4, 5, 6] // evdev KEY_1 to KEY_5
 var repeatTimer: Timer?
 let defaults = UserDefaults.standard
 // The user's own key repeat (units of 15 ms), as macOS would apply to a real keyboard.
@@ -46,6 +50,7 @@ func key(_ code: Int, _ down: Bool) {
   guard let mac = macKey[code] else { return }
   if let flag = modifierFlag[code] {
     if down { flags.insert(flag) } else { flags.remove(flag) }
+    if code == 126 { rightCmd = down }
     let e = CGEvent(keyboardEventSource: source, virtualKey: mac, keyDown: down)
     e?.type = .flagsChanged
     e?.flags = flags
@@ -66,6 +71,9 @@ func key(_ code: Int, _ down: Bool) {
 func post(_ mac: CGKeyCode, _ down: Bool, repeating: Bool) {
   let e = CGEvent(keyboardEventSource: source, virtualKey: mac, keyDown: down)
   e?.flags = flags
+  if rightCmd, let digit = macKey.first(where: { $0.value == mac })?.key, workspaceDigits.contains(digit) {
+    e?.flags = flags.subtracting(.maskCommand).union([.maskAlternate, .maskShift])
+  }
   if repeating { e?.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
   e?.post(tap: .cghidEventTap)
 }
@@ -177,6 +185,10 @@ func menuBar(hidden: Bool) {
   CFPreferencesSetValue("_HIHideMenuBar" as CFString, hidden as CFBoolean, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
   CFPreferencesAppSynchronize(kCFPreferencesAnyApplication)
   DistributedNotificationCenter.default().postNotificationName(.init("AppleInterfaceMenuBarHidingChangedNotification"), object: nil, userInfo: nil, deliverImmediately: true)
+  // dinky does not notice the screen growing or shrinking by the menu bar, so it lays the windows out again.
+  DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+    try? Process.run(URL(fileURLWithPath: NSHomeDirectory() + "/.local/bin/dinky"), arguments: ["retile"])
+  }
 }
 
 /// Three/four-finger swipe: Spaces (horizontal) or Mission Control / App Exposé (vertical).
