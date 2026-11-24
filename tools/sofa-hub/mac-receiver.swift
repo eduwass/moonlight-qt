@@ -187,8 +187,22 @@ func dinky(_ args: [String]) {
   try? Process.run(URL(fileURLWithPath: NSHomeDirectory() + "/.local/bin/dinky"), arguments: args)
 }
 
-// Four fingers up hides the menu bar, and once it is hidden opens Mission Control; down shows the bar.
+// Four fingers up hides the menu bar, and once it is hidden opens Mission Control; down closes Mission
+// Control if it is open, else shows the bar. Opening it again is what closes it.
+func missionControlOpen() -> Bool {
+  // Mission Control puts screen-sized Dock windows above the normal layers (18 and 20); closed, the Dock
+  // shows only its wallpaper, far below.
+  let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+  return windows.contains { ($0["kCGWindowOwnerName"] as? String) == "Dock" && ($0["kCGWindowLayer"] as? Int ?? 0) > 0 }
+}
+
 func fourFingers(up: Bool) {
+  if missionControlOpen() {
+    if up { return } // already open: another up would close it
+    print("mission control closed")
+    try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: ["-a", "Mission Control"])
+    return
+  }
   let hidden = CFPreferencesCopyAppValue("_HIHideMenuBar" as CFString, kCFPreferencesAnyApplication) as? Bool ?? false
   if up && hidden {
     print("mission control")
