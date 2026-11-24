@@ -43,6 +43,7 @@ export const HID = {
   Home: 7,
   VolumeUp: 8,
   VolumeDown: 9,
+  Wake: 13,
   PlayPause: 14,
 } as const;
 

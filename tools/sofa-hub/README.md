@@ -5,9 +5,13 @@ and trackpad belong to the desktop. Runs on omarchypc as a systemd user service.
 
 - **On the Apple TV:** arrows move, Enter selects, Esc/Backspace go back, ⌘H or F3 go home,
   Space or the play key play or pause, the volume keys change the TV's volume. The trackpad is held
-  and does nothing.
-- **Streaming omarchypc:** the hub follows `CLIENT CONNECTED` / `CLIENT DISCONNECTED` in Sunshine's
-  log and lets go of both devices for the stream.
+  and does nothing. The first key after two quiet minutes wakes the Apple TV first, which turns the
+  TV on over HDMI-CEC.
+- **Streaming omarchypc or the Mac:** the hub follows `CLIENT CONNECTED` / `CLIENT DISCONNECTED` in
+  Sunshine's log (on the Mac, the receiver does) and lets go of both devices for the stream, but only
+  when the sofa keyboard or trackpad was used in the 90 s before it started. A stream nobody on the
+  sofa started (mbpmax watching omarchypc) leaves them on the Apple TV. A hub restarted mid-stream
+  starts on the Apple TV too.
 - **In a stream:** the desktop gets a copy of the trackpad with palms filtered out touch by touch
   (`palm.ts`): a touch that lands within 0.3 s of a key, or grows palm-sized, is dropped until lifted.
 - **By hand:** Caps+Esc, or `bun hub.ts mode tv|desktop|toggle`.

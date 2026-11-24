@@ -9,7 +9,7 @@
 import { existsSync, unlinkSync } from "node:fs";
 import { AppleTv } from "./appletv.ts";
 import { EV_KEY, InputDevice, deviceId, findEventNode, type InputEvent } from "./evdev.ts";
-import { KEY, type Modifiers, isModeToggle, keyToHid, repeats } from "./keys.ts";
+import { HID, KEY, type Modifiers, isModeToggle, keyToHid, repeats } from "./keys.ts";
 import { MacLink, MacTrackpad } from "./mac.ts";
 import { BTN, PalmFilter } from "./palm.ts";
 import { type AbsInfo, VirtualDevice } from "./uinput.ts";
@@ -63,6 +63,12 @@ function setMode(next: Mode): void {
 }
 
 // Whoever is being streamed gets the input: omarchypc first, then the Mac, else the Apple TV.
+// A stream only counts when it is watched from the sofa: one that starts with no sofa input in the
+// last SOFA_CLAIM_MS is another client (mbpmax streaming omarchypc or mbp13), and the keyboard stays
+// on the Apple TV. Caps+Esc still switches by hand.
+const SOFA_CLAIM_MS = 90_000;
+let lastSofaInputAt = 0;
+const fromSofa = () => Date.now() - lastSofaInputAt < SOFA_CLAIM_MS;
 let desktopStreamed = false;
 let macStreamed = false;
 const decide = () => setMode(desktopStreamed ? "desktop" : macStreamed ? "mac" : "tv");
@@ -104,6 +110,7 @@ function makeVirtualPad(real: InputDevice): void {
 }
 
 function onTrackpad(events: InputEvent[]): void {
+  lastSofaInputAt = Date.now();
   const typing = Date.now() - lastKeyAt < TYPING_MS;
   if (mode === "desktop") virtualPad?.write(palm.frame(events, typing));
   else if (mode === "mac") macPad.frame(palm.frame(events, typing));
@@ -116,11 +123,18 @@ const mac = new MacLink(
   process.env.SOFA_MAC_LISTEN ?? (tailscaleIp || "127.0.0.1"),
   Number(process.env.SOFA_MAC_PORT ?? 47901),
   (process.env.SOFA_MAC_PEERS ?? "100.114.79.7").split(","), // mbp13 over Tailscale
-  (on) => ((macStreamed = on), decide()),
+  (on) => {
+    macStreamed = on && fromSofa();
+    if (on && !macStreamed) console.log("mac: streamed, but not from the sofa; the keyboard stays on the Apple TV");
+    decide();
+  },
 );
 const macPad = new MacTrackpad((m) => mac.send(m), Number(process.env.SOFA_MAC_TRACKING ?? 0.6875));
 
 // ----------------------------------------------------------------- keyboard
+
+const WAKE_AFTER_MS = 2 * 60_000;
+let lastTvKeyAt = 0;
 
 function onKeyboard(events: InputEvent[]): void {
   for (const { type, code, value } of events) {
@@ -132,6 +146,7 @@ function onKeyboard(events: InputEvent[]): void {
     else if (code === KEY.LEFTALT || code === KEY.RIGHTALT) mods.alt = down;
     else if (code === KEY.LEFTSHIFT || code === KEY.RIGHTSHIFT) mods.shift = down;
     else if (value === 1) lastKeyAt = Date.now();
+    if (value === 1) lastSofaInputAt = Date.now();
 
     if (value === 1 && isModeToggle(code, mods)) {
       setMode(mode === "tv" ? "desktop" : "tv");
@@ -148,6 +163,9 @@ function onKeyboard(events: InputEvent[]): void {
       if (hid !== undefined) void tv.button(hid, false);
       held.delete(code);
     } else if (value === 1) {
+      // After a quiet spell the Apple TV is likely asleep: any key wakes it (and the TV, over HDMI-CEC) first.
+      if (Date.now() - lastTvKeyAt > WAKE_AFTER_MS) void tv.button(HID.Wake, true).then(() => tv.button(HID.Wake, false));
+      lastTvKeyAt = Date.now();
       const hid = keyToHid(code, mods);
       if (hid === null) continue;
       held.set(code, hid);
@@ -218,22 +236,18 @@ function followSunshine(): void {
       buffered = lines.pop() ?? "";
       for (const line of lines) {
         const next = streamMode(line);
-        if (next) (desktopStreamed = next === "desktop"), decide();
+        if (!next) continue;
+        desktopStreamed = next === "desktop" && fromSofa();
+        if (next === "desktop" && !desktopStreamed) console.log("desktop: streamed, but not from the sofa; the keyboard stays on the Apple TV");
+        decide();
       }
     }
   })();
 }
 
-/** Where input belongs right now, from the last connect or disconnect Sunshine logged. */
-async function currentStreamMode(): Promise<Mode> {
-  const text = await Bun.file(SUNSHINE_LOG).text().catch(() => "");
-  const last = text.split("\n").reverse().map(streamMode).find((m) => m !== null);
-  return last ?? "tv";
-}
-
 scan();
 setInterval(scan, 2000); // the trackpad gets a new event node every time it wakes from sleep
-desktopStreamed = (await currentStreamMode()) === "desktop";
+// Started mid-stream, the hub cannot tell who is watching, so it starts on the Apple TV (Caps+Esc to switch).
 if (process.env.SOFA_START_MODE) setMode(process.env.SOFA_START_MODE as Mode);
 else decide();
 followSunshine();
