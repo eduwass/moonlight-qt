@@ -642,11 +642,21 @@ func vdisplaySize() -> (Int, Int)? {
   return parts.count >= 2 ? (parts[0], parts[1]) : nil
 }
 
-/// Asks vdisplay for w x h points and waits (up to 3 s) until it says so.
+/// Asks vdisplay for w x h points and waits until it says so. vdisplay quits and is started afresh when its
+/// display refuses a mode (and Sunshine with it, see on-new-display): then it is asked once more, up to 12 s.
 func setVdisplay(_ w: Int, _ h: Int) -> Bool {
-  guard (try? "\(w) \(h)\n".write(toFile: vdisplay + "/want", atomically: true, encoding: .utf8)) != nil else { return false }
-  for _ in 0..<60 {
+  let ask = { (try? "\(w) \(h)\n".write(toFile: vdisplay + "/want", atomically: true, encoding: .utf8)) != nil }
+  let displayId = { () -> String in
+    let parts = ((try? String(contentsOfFile: vdisplay + "/state", encoding: .utf8)) ?? "").split(separator: " ")
+    return parts.count >= 3 ? String(parts[2]) : ""
+  }
+  let before = displayId()
+  guard ask() else { return false }
+  var askedAgain = false
+  for _ in 0..<240 {
     if let now = vdisplaySize(), now == (w, h) { return true }
+    let id = displayId()
+    if !askedAgain && !id.isEmpty && id != before { askedAgain = true; Thread.sleep(forTimeInterval: 1); _ = ask() }
     Thread.sleep(forTimeInterval: 0.05)
   }
   return false
