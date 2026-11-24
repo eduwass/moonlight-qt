@@ -92,9 +92,9 @@ equal(tvVolumeKey(KEY.VOLUMEDOWN, { ...none, shift: true }), null, "with a modif
   const { MacTrackpad } = await import("./mac.ts");
   const { ABS, EV_ABS } = await import("./palm.ts");
 
-  const s = parseSettings({ t: "settings", statsEvery: 30, previewsEvery: 300, tvScale: 2, trackpadSpeed: 1, tapToClick: true, naturalScroll: false, volumeKeysToTV: false, apps: "names" });
-  deepEqual(s, { statsEvery: 30, previewsEvery: 300, tvScale: 2, trackpadSpeed: 1, tapToClick: true, naturalScroll: false, volumeKeysToTV: false, apps: "names" });
-  deepEqual(parseSettings({ statsEvery: -1, tvScale: "big", apps: "all", naturalScroll: 1 }, s), s, "bad fields keep what was there");
+  const s = parseSettings({ t: "settings", statsEvery: 30, previewsEvery: 300, tvMode: "3840x2160@60", tvScale: 2, trackpadSpeed: 1, tapToClick: true, naturalScroll: false, volumeKeysToTV: false, apps: "names" });
+  deepEqual(s, { statsEvery: 30, previewsEvery: 300, tvMode: "3840x2160@60", tvScale: 2, trackpadSpeed: 1, tapToClick: true, naturalScroll: false, volumeKeysToTV: false, apps: "names" });
+  deepEqual(parseSettings({ statsEvery: -1, tvMode: "4k", tvScale: "big", apps: "all", naturalScroll: 1 }, s), s, "bad fields keep what was there");
   deepEqual(parseSettings({}), DEFAULTS);
 
   equal(trimUrl("Recents · Paper - https://app.paper.design/"), "Recents · Paper");
@@ -163,5 +163,54 @@ equal(tvVolumeKey(KEY.VOLUMEDOWN, { ...none, shift: true }), null, "with a modif
   equal(has(out, ABS.MT_TRACKING_ID, 3) && has(out, BTN.TOOL_FINGER, 1), true, "a new finger works at once beside a resting palm");
   out = f.reset();
   equal(has(out, ABS.MT_TRACKING_ID, -1) && has(out, BTN.TOUCH, 0), true, "reset lifts what the desktop sees");
+}
+// Sizes on the TV, and the test tone.
+{
+  const { captureFactor, hyprScale, macDisplayFacts, monitorLua, outputState, pathMs, sizeTarget, sunshineStreaming, tvDisplayFacts } = await import("./display.ts");
+  const { parseMode } = await import("./settings.ts");
+  const { toneWav } = await import("./tone.ts");
+  equal(hyprScale(1.25, 1920, 1080), 1.25);
+  equal(hyprScale(1.6, 1920, 1080), 1.6);
+  equal(hyprScale(1.3, 1920, 1080), 1.3333333333333333, "to the nearest scale with whole logical pixels");
+  equal(hyprScale(1.26, 1920, 1080), 1.25, "down when that is nearer");
+  equal(hyprScale(9, 1920, 1080), 10, "the larger on a tie");
+  const fhd = { width: 1920, height: 1080, fps: 60 };
+  const tv = tvDisplayFacts(fhd, 1.25, "");
+  deepEqual([tv.pixels, tv.scale, tv.looks, tv.tryable, tv.why], [[1920, 1080], 1.25, [1536, 864], true, ""]);
+  deepEqual(tv.modes, [[1920, 1080], [2560, 1440], [3840, 2160]]);
+  deepEqual(tv.sizes?.map((x) => x.looks), [[960, 540], [1200, 675], [1536, 864], [1920, 1080]]);
+  deepEqual(tvDisplayFacts({ width: 3840, height: 2160, fps: 60 }, 3.2, "").looks, [1200, 675], "4K, Larger");
+  equal(tvDisplayFacts(fhd, 1, "streamed from another device").tryable, false);
+  deepEqual(sizeTarget([3840, 2160], [1200, 675]), { width: 3840, height: 2160, fps: 60, scale: 3.2, looks: [1200, 675] });
+  deepEqual(sizeTarget([2560, 1440], [1200, 675]), { width: 2560, height: 1440, fps: 60, scale: 256 / 120, looks: [1200, 675] });
+  deepEqual(sizeTarget([2560, 1440], [1000, 700]).looks, [1024, 576], "an odd size: the nearest scale, and the size it really looks");
+  for (const [w, h] of tv.modes!) for (const { looks } of tv.sizes!) deepEqual(sizeTarget([w, h], looks).looks, looks, `${w}x${h} looking ${looks}`);
+  equal(captureFactor(1920, 1.25), 1.25, "1080p: the picture at full pixels");
+  equal(captureFactor(3840, 3.2) * (3840 / 3.2), 1920, "4K: scaled down to 1920 wide");
+  deepEqual(parseMode("3840x2160@60"), { width: 3840, height: 2160, fps: 60 });
+  equal(parseMode("4k"), null);
+  equal(parseMode("100x100@60"), null);
+  equal(pathMs([40, 10, 12, 11, 500]), 6, "half the median round trip");
+  equal(pathMs([]), null);
+  deepEqual(macDisplayFacts({ pixels: [2880, 1800], scale: 2, looks: [1440, 900] }), {
+    pixels: [2880, 1800], scale: 2, looks: [1440, 900], modes: [], sizes: [], tryable: false, why: "needs Screen Recording on MBP13",
+  });
+  equal(sunshineStreaming("[a]: Info: CLIENT CONNECTED\n[b]: Info: CLIENT DISCONNECTED\n"), false);
+  equal(sunshineStreaming("[b]: Info: CLIENT DISCONNECTED\n[c]: Info: CLIENT CONNECTED\n[d]: Info: x"), true);
+  equal(sunshineStreaming("nothing"), null);
+  const out = outputState({ name: "virtual", width: 3440, height: 1440, refreshRate: 59.94, scale: 1.333333 });
+  deepEqual(out, { mode: "3440x1440@60", scale: 1.333333 });
+  equal(monitorLua(out), 'hl.monitor({ output = "virtual", mode = "3440x1440@60", position = "auto", scale = 1.333333 })');
+
+  const wav = toneWav(1);
+  const v = new DataView(wav.buffer);
+  equal(new TextDecoder().decode(wav.subarray(0, 4)) + new TextDecoder().decode(wav.subarray(8, 12)), "RIFFWAVE");
+  equal(wav.length, 44 + 48_000 * 4, "1 s of 48 kHz 16-bit stereo");
+  equal(v.getUint32(40, true), 48_000 * 4);
+  let peak = 0;
+  for (let i = 44; i < wav.length; i += 2) peak = Math.max(peak, Math.abs(v.getInt16(i, true)));
+  equal(Math.abs(peak - Math.round(32767 * 10 ** (-12 / 20))) <= 2, true, "-12 dBFS peak");
+  equal(Math.abs(v.getInt16(44 + 4 * 5, true)) < 0.1 * peak, true, "fades in");
+  equal(v.getInt16(wav.length - 4, true), 0, "and out to silence");
 }
 console.log("sofa-hub check passed");

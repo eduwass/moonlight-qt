@@ -7,7 +7,8 @@ import type { AppsShown } from "./stats.ts";
 export type Settings = {
   statsEvery: number; // seconds between stats on the app's home screen; 0 = never
   previewsEvery: number; // seconds between screen previews there; 0 = never
-  tvScale: number; // omarchypc's desktop scale when the sofa streams it
+  tvMode: string; // omarchypc's stream output when the sofa streams it, "3840x2160@60"
+  tvScale: number; // and its desktop scale then
   trackpadSpeed: number; // macOS tracking speed, for the app's pointer and the Mac's
   tapToClick: boolean;
   naturalScroll: boolean;
@@ -18,6 +19,7 @@ export type Settings = {
 export const DEFAULTS: Settings = {
   statsEvery: 5,
   previewsEvery: 0,
+  tvMode: process.env.SOFA_TV_MODE ?? "1920x1080@60",
   tvScale: Number(process.env.SOFA_TV_SCALE ?? 1.6),
   trackpadSpeed: 0.6875,
   tapToClick: process.env.SOFA_MAC_TAP === "1",
@@ -34,6 +36,7 @@ export function parseSettings(m: Record<string, unknown>, prev: Settings = DEFAU
   return {
     statsEvery: num(m.statsEvery, 0, 3600) ?? prev.statsEvery,
     previewsEvery: num(m.previewsEvery, 0, 86_400) ?? prev.previewsEvery,
+    tvMode: typeof m.tvMode === "string" && parseMode(m.tvMode) ? m.tvMode : prev.tvMode,
     tvScale: num(m.tvScale, 0.5, 4) ?? prev.tvScale,
     trackpadSpeed: num(m.trackpadSpeed, 0, 3) ?? prev.trackpadSpeed,
     tapToClick: bool(m.tapToClick) ?? prev.tapToClick,
@@ -41,6 +44,16 @@ export function parseSettings(m: Record<string, unknown>, prev: Settings = DEFAU
     volumeKeysToTV: bool(m.volumeKeysToTV) ?? prev.volumeKeysToTV,
     apps: m.apps === "titles" || m.apps === "names" || m.apps === "off" ? m.apps : prev.apps,
   };
+}
+
+export type TvMode = { width: number; height: number; fps: number };
+
+/** "3840x2160@60" as numbers, or null when it is not a mode a stream could have. */
+export function parseMode(mode: string): TvMode | null {
+  const m = mode.match(/^(\d+)x(\d+)@(\d+)$/);
+  if (!m) return null;
+  const [width, height, fps] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  return width >= 640 && width <= 7680 && height >= 360 && height <= 4320 && fps >= 24 && fps <= 240 ? { width, height, fps } : null;
 }
 
 const FILE = `${homedir()}/.config/sofa-hub/app-settings.json`;

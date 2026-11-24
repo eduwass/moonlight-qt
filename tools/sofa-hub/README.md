@@ -34,7 +34,7 @@ the Apple TV at 192.168.68.67; the newest connection wins). One JSON object per 
 {"t":"screen","name":"home"}            // or "stream", "other"
 
 // app -> hub, on connect and on every change; kept in ~/.config/sofa-hub/app-settings.json across restarts
-{"t":"settings","statsEvery":5,"previewsEvery":300,"tvScale":1.6,"trackpadSpeed":0.6875,"tapToClick":false,
+{"t":"settings","statsEvery":5,"previewsEvery":300,"tvMode":"1920x1080@60","tvScale":1.6,"trackpadSpeed":0.6875,"tapToClick":false,
  "naturalScroll":true,"volumeKeysToTV":true,"apps":"titles"}   // apps: "titles" | "names" | "off"
 
 // app -> hub: restart a computer; the hub answers {"t":"restart","host":"MBP13","ok":false,"error":"..."}
@@ -54,8 +54,34 @@ the Apple TV at 192.168.68.67; the newest connection wins). One JSON object per 
   "diskUsed":319164489728,"diskTotal":477936746496,"uptime":77130,"apps":["Helium — Google"],
   "os":"linux","pressure":"normal"}]}    // pressure: "normal" | "warn" | "critical"
 
+// each host in stats also has its display: the pixels, the scale they are drawn at (pixels / looks), the
+// size it looks, the stream pixels and sizes (as the size it looks) the app offers, and whether one can be
+// tried now (why is "" when it can). omarchypc's is the sofa's stream (tvMode at tvScale); the Mac's is
+// its main display, with no modes or sizes yet
+"display":{"pixels":[1920,1080],"scale":1.6,"looks":[1200,675],"tryable":true,"why":"",
+           "modes":[[1920,1080],[2560,1440],[3840,2160]],
+           "sizes":[{"label":"Largest","looks":[960,540]},{"label":"Larger","looks":[1200,675]},
+                    {"label":"Balanced","looks":[1536,864]},{"label":"More space","looks":[1920,1080]}]}
+
 // hub -> app: on the home screen only, every previewsEvery s, and on arriving if the last is older than that
 {"t":"preview","host":"omarchypc","jpeg":"<base64, ~640 px wide, under 150 KB>","at":1795454006}
+
+// app -> hub: try a size on omarchypc (not while another device streams it): the stream's pixels and the size
+// the desktop looks. The output takes it at once, at the scale nearest pixels / looks that Hyprland accepts,
+// and the hub answers with that scale and the size it really looks, and the whole output as a JPEG at most
+// 1920 wide (4K is scaled down) under 450 KB; of tries sent while one runs only the latest is answered. Keep
+// makes it the sofa's (tvMode and tvScale, saved, and applied); cancel puts back what was there before the
+// first try, as do two minutes without a try or keep, the app going, and a stream starting
+{"t":"trySize","host":"omarchypc","pixels":[3840,2160],"looks":[1200,675]}
+{"t":"sizePreview","host":"omarchypc","pixels":[3840,2160],"looks":[1200,675],"scale":3.2,"jpeg":"<base64>"}  // or "error":"..."
+{"t":"keepSize","host":"omarchypc","pixels":[3840,2160],"looks":[1200,675]}
+{"t":"cancelSize","host":"omarchypc"}
+
+// app -> hub: a 440 Hz test tone at -12 dBFS on the computer's default output (through a stream, if one is up),
+// 1 to 30 s; answered once it plays, with the input path's one-way time in ms: 1 for omarchypc (uinput,
+// here), for the Mac half the median of 5 round trips to its receiver
+{"t":"tone","host":"omarchypc","seconds":6}                // or "MBP13"
+{"t":"tone","host":"MBP13","ok":true,"pathMs":4}          // or "ok":false,"error":"..."
 
 // hub -> app: the trackpad, only on the home screen with input on the Apple TV (Mac-shaped, see mac.ts)
 {"t":"move","dx":3.2,"dy":-1.5}
@@ -69,13 +95,15 @@ omarchypc's come from `/proc`, `statfs /` and `hyprctl clients -j`, pressure fro
 (some avg10 over 10 warn, over 30 critical, or under a tenth of memory available), its preview from
 `grim`; batteries from `/sys/class/power_supply/hid-*-battery*`. The Mac's receiver sends `stats <json>`
 lines every 5 s (pressure from `kern.memorystatus_vm_pressure_level`), and answers the hub's `preview`
-with `preview <base64>` or `preview-failed no-permission`, and `restart` with `restarting` or
-`restart-failed <why>`. `tvScale` is omarchypc's scale on the TV from the next stream; `trackpadSpeed`,
+with `preview <base64>` or `preview-failed no-permission`, `restart` with `restarting` or
+`restart-failed <why>`, `tone` with `tone-ok` or `tone-failed <why>` (afplay), and `ping` with `pong <id>`. `tvMode` and `tvScale` are omarchypc's stream output and scale on the TV from the next stream; `trackpadSpeed`,
 `tapToClick` and `naturalScroll` are the app's pointer and the Mac's.
 
 Restarting omarchypc is `systemctl reboot` (logind allows the session's user; the disk unlocks and it
 logs in by itself). Restarting the Mac is `fdesetup authrestart`, so it comes back logged in too.
-To watch it from another machine, add its address to `SOFA_APP_PEERS` and `nc omarchypc 47902`.
+Sizes are set straight through Hyprland under `sunshine-virtual-display`'s lock (`display.ts`), not with
+its `resize`, which would also unmute the speakers and set the cursor up for a stream. The tone plays with
+`pw-play` (`paplay` without it). To watch it from another machine, add its address to `SOFA_APP_PEERS` and `nc omarchypc 47902`.
 
 ## Install
 

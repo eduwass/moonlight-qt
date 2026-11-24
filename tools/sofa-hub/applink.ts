@@ -30,6 +30,8 @@ export class AppLink {
       screen: (screen: AppScreen) => void;
       settings: (m: Record<string, unknown>) => void;
       restart: (host: string) => void;
+      request: (m: Record<string, unknown>) => void; // trySize, keepSize, cancelSize, tone
+      gone: () => void;
     },
   ) {
     Bun.listen<{ lines: (chunk: string) => string[] }>({
@@ -54,6 +56,7 @@ export class AppLink {
               if (m?.t === "screen" && ["home", "stream", "other"].includes(m.name)) this.setScreen(m.name);
               else if (m?.t === "settings") this.on.settings(m);
               else if (m?.t === "restart" && typeof m.host === "string") this.on.restart(m.host);
+              else if (["trySize", "keepSize", "cancelSize", "tone"].includes(m?.t) && typeof m.host === "string") this.on.request(m);
               else if (m?.t === "screenshot" && typeof m.jpeg === "string") {
                 // The answer to `bun hub.ts screenshot`: what the Apple TV shows, for debugging.
                 const path = `${process.env.XDG_RUNTIME_DIR ?? "/tmp"}/sofa-app-screenshot.jpg`;
@@ -69,6 +72,7 @@ export class AppLink {
           this.socket = null;
           console.log("app: gone");
           this.setScreen("other");
+          this.on.gone();
         },
       },
     });

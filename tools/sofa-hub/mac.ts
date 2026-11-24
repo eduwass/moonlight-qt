@@ -19,7 +19,9 @@ export type MacMessage =
   | { t: "dock"; d: number; axis: "h" | "v"; phase: number }
   | { t: "reset" }
   | { t: "preview" }
-  | { t: "restart" };
+  | { t: "restart" }
+  | { t: "tone"; seconds: number }
+  | { t: "ping"; id: number };
 
 // CGScrollPhase and CGMomentumScrollPhase values.
 const PHASE = { None: 0, Began: 1, Changed: 2, Ended: 4 } as const;

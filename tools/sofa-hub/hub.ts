@@ -6,6 +6,7 @@
 // The volume keys go to the Apple TV, which sets the TV's volume over HDMI-CEC; in a stream of omarchypc
 // the desktop gets the keyboard through the hub's own copy of it, without them. The Sofa app can turn
 // that off, and sets the trackpad, the stats and previews it gets, and restarts computers (settings.ts).
+// It also tries sizes for omarchypc's desktop on the TV (display.ts) and plays a test tone (tone.ts).
 //
 //   bun hub.ts                  run the hub (the systemd user service does this)
 //   bun hub.ts mode tv|desktop|mac|toggle    tell the running hub where input goes
@@ -13,12 +14,14 @@
 import { existsSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { AppLink } from "./applink.ts";
 import { AppleTv } from "./appletv.ts";
+import { SizeTrial, macDisplayFacts, pathMs, sizeTarget, sunshineStreaming, tvDisplayFacts, virtualOutput } from "./display.ts";
 import { EV_KEY, InputDevice, deviceId, findEventNode, type InputEvent } from "./evdev.ts";
 import { HID, KEY, type Modifiers, isModeToggle, keyToHid, repeats, tvVolumeKey } from "./keys.ts";
 import { MacLink, MacTrackpad } from "./mac.ts";
 import { BTN, PalmFilter } from "./palm.ts";
-import { loadSettings, parseSettings, saveSettings } from "./settings.ts";
+import { loadSettings, parseMode, parseSettings, saveSettings } from "./settings.ts";
 import { type Host, PREVIEW_MAX, hidBatteries, localHost, localPreview, shapeApps, sofaDevices } from "./stats.ts";
+import { playTone } from "./tone.ts";
 import { type AbsInfo, VirtualDevice } from "./uinput.ts";
 
 type Mode = "tv" | "desktop" | "mac";
@@ -191,8 +194,12 @@ function sendDevices(always = false): void {
 async function sendStats(): Promise<void> {
   if (!app.connected) return;
   try {
-    const hosts = [await localHost(HOST_NAME)];
-    if (macHost && Date.now() - macHost.at < MAC_STATS_STALE_MS) hosts.push(macHost.host);
+    const mode = parseMode(settings.tvMode);
+    const hosts = [{ ...(await localHost(HOST_NAME)), ...(mode ? { display: tvDisplayFacts(mode, settings.tvScale, await sizeWhyNot()) } : {}) }];
+    if (macHost && Date.now() - macHost.at < MAC_STATS_STALE_MS) {
+      const { display, ...host } = macHost.host;
+      hosts.push(Array.isArray(display?.pixels) ? { ...host, display: macDisplayFacts(display!) } : host);
+    }
     app.send({ t: "stats", hosts: hosts.map((h) => ({ ...h, apps: shapeApps(h.apps, settings.apps) })) });
   } catch (error) {
     console.error(`stats: ${(error as Error).message}`);
@@ -207,6 +214,8 @@ const app = new AppLink(Number(process.env.SOFA_APP_PORT ?? 47902), (process.env
   },
   settings: (m) => applySettings(m),
   restart: (host) => restart(host),
+  request: (m) => onRequest(m),
+  gone: () => void sizes.cancel("the app went"),
 });
 const appPad = new MacTrackpad((m) => (m.t === "move" || m.t === "button" || m.t === "scroll") && app.send(m), padOptions());
 setInterval(sendDevices, 10_000);
@@ -291,7 +300,73 @@ function restart(host: string): void {
   mac.send({ t: "restart" });
 }
 
-/** The receiver's answers: `preview <base64>`, `preview-failed <why>`, `restarting`, `restart-failed <why>`. */
+// ----------------------------------------------------------------- sizes and the test tone
+// The app tries omarchypc's size on the TV (only while nobody but the sofa streams it), keeps or cancels
+// it (display.ts), and plays a test tone on either computer.
+
+async function sizeWhyNot(): Promise<string> {
+  if (sunshineLive && !desktopStreamed) return "streamed from another device";
+  if (!(await virtualOutput())) return "no virtual output (a monitor is plugged in)";
+  return "";
+}
+
+let pendingTone: { host: string; timer: Timer; path: Promise<number | null> } | null = null;
+
+// The input path's one-way time for the app's responsiveness estimate: omarchypc's input is injected here
+// (uinput), the Mac's crosses Tailscale to the receiver: half the median of 5 round trips there.
+const pongs = new Map<number, () => void>();
+let pingId = 0;
+async function macPathMs(): Promise<number | null> {
+  const trips: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    const id = ++pingId;
+    const start = performance.now();
+    const answered = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => (pongs.delete(id), resolve(false)), 1000);
+      pongs.set(id, () => (clearTimeout(timer), resolve(true)));
+      mac.send({ t: "ping", id });
+    });
+    if (answered) trips.push(performance.now() - start);
+  }
+  return pathMs(trips);
+}
+
+function onRequest(m: Record<string, unknown>): void {
+  const host = String(m.host);
+  const here = host.toLowerCase() === HOST_NAME.toLowerCase();
+  const pair = (v: unknown) => (Array.isArray(v) && v.length === 2 && v.every((n) => Number.isInteger(n) && n > 0) ? (v as [number, number]) : null);
+  const pixels = pair(m.pixels);
+  const looks = pair(m.looks);
+  if (m.t === "tone") {
+    const seconds = Math.min(Math.max(Number(m.seconds) || 6, 1), 30);
+    const reply = (ok: boolean, error?: string, path: number | null = null) =>
+      app.send({ t: "tone", host, ok, ...(path !== null ? { pathMs: path } : {}), ...(error ? { error } : {}) });
+    if (here) return void playTone(seconds).then((r) => (console.log(`tone: ${seconds} s ${r.ok ? "playing" : r.error}`), reply(r.ok, r.error, 1)));
+    if (host.toLowerCase() !== macName().toLowerCase()) return reply(false, `no computer called ${host}`);
+    if (!mac.connected) return reply(false, "the Mac's receiver is not connected");
+    clearTimeout(pendingTone?.timer);
+    pendingTone = { host, timer: setTimeout(() => ((pendingTone = null), reply(false, "no answer from the Mac")), 5000), path: macPathMs() };
+    return mac.send({ t: "tone", seconds });
+  }
+  if (!here) {
+    if (m.t === "trySize") app.send({ t: "sizePreview", host, pixels: m.pixels, looks: m.looks, error: `sizes cannot be tried on ${host} yet` });
+    return;
+  }
+  if (m.t === "cancelSize") return void sizes.cancel("the app cancelled");
+  // A size is the stream's pixels and the size the desktop looks, no bigger than them, at a scale up to 4.
+  const target = pixels && looks && parseMode(`${pixels[0]}x${pixels[1]}@60`) && looks[0] <= pixels[0] && pixels[0] / looks[0] <= 4 ? sizeTarget(pixels, looks) : null;
+  if (!target) return void (m.t === "trySize" && app.send({ t: "sizePreview", host, pixels: m.pixels, looks: m.looks, error: "no such size" }));
+  if (m.t === "trySize") return sizes.try(pixels!, looks!, sizeWhyNot);
+  // keepSize: the sofa's stream from now on, saved as the app's tvMode and tvScale, and the output's now.
+  applySettings({ tvMode: `${target.width}x${target.height}@${target.fps}`, tvScale: target.scale });
+  void (async () => {
+    if (await sizeWhyNot()) return void sizes.cancel("kept while another device streams");
+    await sizes.keep(target);
+  })().catch((error) => console.error(`size: ${(error as Error).message}`));
+}
+
+/** The receiver's answers: `preview <base64>`, `preview-failed <why>`, `restarting`, `restart-failed <why>`,
+ * `tone-ok`, `tone-failed <why>`, `pong <id>`. */
 function onMacLine(line: string): void {
   const space = line.indexOf(" ");
   const [word, rest] = space < 0 ? [line, ""] : [line.slice(0, space), line.slice(space + 1)];
@@ -306,6 +381,17 @@ function onMacLine(line: string): void {
     pendingRestart = null;
     console.log(`restart: ${host}: ${line}`);
     app.send({ t: "restart", host, ok: word === "restarting", ...(word === "restart-failed" ? { error: rest || "failed" } : {}) });
+  } else if (word === "pong") {
+    pongs.get(Number(rest))?.();
+    pongs.delete(Number(rest));
+  } else if (word === "tone-ok" || word === "tone-failed") {
+    const host = pendingTone?.host ?? macName();
+    const path = pendingTone?.path ?? Promise.resolve(null);
+    clearTimeout(pendingTone?.timer);
+    pendingTone = null;
+    void path.then((ms) =>
+      app.send({ t: "tone", host, ok: word === "tone-ok", ...(ms !== null ? { pathMs: ms } : {}), ...(word === "tone-failed" ? { error: rest || "failed" } : {}) }),
+    );
   }
 }
 
@@ -488,25 +574,34 @@ const SUNSHINE_LOG = process.env.SOFA_SUNSHINE_LOG ?? `${process.env.HOME}/.conf
 const streamMode = (line: string): Mode | null =>
   line.includes("CLIENT CONNECTED") ? "desktop" : line.includes("CLIENT DISCONNECTED") ? "tv" : null;
 
-// The Apple TV's picture: 1080p at the app's tvScale, 1.6 by default (a 1200x675 desktop). Sunshine sizes the display only when a
+// The Apple TV's picture: the app's tvMode and tvScale, 1080p at 1.6 by default (a 1200x675 desktop). Sunshine sizes the display only when a
 // stream launches the desktop; joining one already running (mbpmax's) keeps that client's size and
 // scale, and a fresh launch keeps the last scale, so the sofa sets both. Shared streams see it too.
 // The Mac launcher's sunshine-client-pointer flag (the Mac draws its own pointer, so this one is made
 // clear) is taken away too: the Apple TV draws none, and the cursor would be invisible on it.
-const TV_MODE = (process.env.SOFA_TV_MODE ?? "1920x1080@60").match(/^(\d+)x(\d+)@(\d+)$/);
-
 function tvDisplay(): void {
-  if (!TV_MODE) return;
+  const mode = parseMode(settings.tvMode);
+  if (!mode) return;
   const run = process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
   rmSync(`${run}/sunshine-client-pointer`, { force: true });
   Bun.write(`${run}/sunshine-client-scale`, String(settings.tvScale)).then(() =>
     Bun.spawn([`${process.env.HOME}/.local/bin/sunshine-virtual-display`, "resize"], {
-      env: { ...process.env, SUNSHINE_CLIENT_WIDTH: TV_MODE[1], SUNSHINE_CLIENT_HEIGHT: TV_MODE[2], SUNSHINE_CLIENT_FPS: TV_MODE[3] },
+      env: { ...process.env, SUNSHINE_CLIENT_WIDTH: String(mode.width), SUNSHINE_CLIENT_HEIGHT: String(mode.height), SUNSHINE_CLIENT_FPS: String(mode.fps) },
       stdout: "ignore",
       stderr: "inherit",
     }),
   );
 }
+
+// The size trials, and whether any client streams this desktop (sofa or not), from the log's last word.
+const sizes = new SizeTrial(HOST_NAME, (m) => app.send(m));
+let sunshineLive = (() => {
+  try {
+    return sunshineStreaming(readFileSync(SUNSHINE_LOG, "utf8").slice(-200_000)) ?? false;
+  } catch {
+    return false;
+  }
+})();
 
 function followSunshine(): void {
   const tail = Bun.spawn(["tail", "-F", "-n", "0", SUNSHINE_LOG], { stdout: "pipe", stderr: "ignore" });
@@ -520,7 +615,9 @@ function followSunshine(): void {
         const next = streamMode(line);
         if (!next) continue;
         if (next !== "desktop") streamEnded();
+        sunshineLive = next === "desktop";
         desktopStreamed = next === "desktop" && fromSofa();
+        if (next === "desktop") void sizes.streamStarted(desktopStreamed).catch((e) => console.error(`size: ${(e as Error).message}`));
         if (next === "desktop" && !desktopStreamed) console.log("desktop: streamed, but not from the sofa; the keyboard stays on the Apple TV");
         if (desktopStreamed) tvDisplay();
         decide();

@@ -19,6 +19,19 @@ export type Host = {
   apps: string[]; // what is on screen, most recently used first
   os: "linux" | "macos";
   pressure: Pressure;
+  display?: Display;
+};
+
+/** A screen as the Sofa app's display settings show it: its pixels, the scale it is drawn at, the size it
+ * looks (pixels / scale), the sizes it may be set to, and whether one can be tried now (why not if not). */
+export type Display = {
+  pixels: [number, number];
+  scale: number;
+  looks: [number, number];
+  modes?: [number, number][]; // the stream pixels it may be set to
+  sizes?: { label: string; looks: [number, number] }[];
+  tryable?: boolean;
+  why?: string;
 };
 
 export type Pressure = "normal" | "warn" | "critical";
@@ -191,7 +204,7 @@ export function grimScale(monitors: Monitor[], width = 640): number {
 }
 
 /** Wayland's socket for a service started outside the session: the newest wayland-N in the runtime dir. */
-function waylandEnv(): Record<string, string | undefined> {
+export function waylandEnv(): Record<string, string | undefined> {
   const env = hyprlandEnv();
   if (env.WAYLAND_DISPLAY) return env;
   const dir = env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`;
@@ -205,7 +218,7 @@ function waylandEnv(): Record<string, string | undefined> {
   }
 }
 
-async function run(cmd: string[], env: Record<string, string | undefined>, ms: number): Promise<Uint8Array | null> {
+export async function run(cmd: string[], env: Record<string, string | undefined>, ms: number): Promise<Uint8Array | null> {
   const p = Bun.spawn(cmd, { env, stdout: "pipe", stderr: "pipe" });
   const timer = setTimeout(() => p.kill(), ms);
   const [out, err, code] = await Promise.all([new Response(p.stdout).bytes(), new Response(p.stderr).text(), p.exited]);
