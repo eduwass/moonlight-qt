@@ -30,8 +30,8 @@ let modifierFlag: [Int: CGEventFlags] = [
 let mediaKey: [Int: Int32] = [113: 7, 114: 1, 115: 0, 163: 17, 164: 16, 165: 18]
 
 var flags: CGEventFlags = []
-// Right cmd + 1-5 is alt-shift + 1-5 here, as Karabiner makes it on a Mac's own keyboard (dinky moves the
-// window to that workspace); Karabiner never sees these synthetic keys.
+// Right cmd + 1-5 moves the window to that workspace, as Karabiner makes it do on a Mac's own keyboard;
+// Karabiner never sees these synthetic keys, so dinky is asked straight.
 var rightCmd = false
 let workspaceDigits: Set<Int> = [2, 3, 4, 5, 6] // evdev KEY_1 to KEY_5
 var repeatTimer: Timer?
@@ -57,6 +57,13 @@ func key(_ code: Int, _ down: Bool) {
     e?.post(tap: .cghidEventTap)
     return
   }
+  if rightCmd && workspaceDigits.contains(code) {
+    if down {
+      print("right cmd + \(code - 1): window to workspace \(code - 1)")
+      dinky(["move-window-to-workspace", "\(code - 1)", "--follow"])
+    }
+    return
+  }
   post(mac, down, repeating: false)
   repeatTimer?.invalidate()
   repeatTimer = nil
@@ -71,9 +78,6 @@ func key(_ code: Int, _ down: Bool) {
 func post(_ mac: CGKeyCode, _ down: Bool, repeating: Bool) {
   let e = CGEvent(keyboardEventSource: source, virtualKey: mac, keyDown: down)
   e?.flags = flags
-  if rightCmd, let digit = macKey.first(where: { $0.value == mac })?.key, workspaceDigits.contains(digit) {
-    e?.flags = flags.subtracting(.maskCommand).union([.maskAlternate, .maskShift])
-  }
   if repeating { e?.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
   e?.post(tap: .cghidEventTap)
 }
@@ -179,15 +183,20 @@ func magnify(_ amount: Double, phase: Int64) {
 
 func smartZoom() { gestureEvent(type: 29, subtype: 22)?.post(tap: .cghidEventTap) } // kIOHIDEventTypeZoomToggle
 
+func dinky(_ args: [String]) {
+  try? Process.run(URL(fileURLWithPath: NSHomeDirectory() + "/.local/bin/dinky"), arguments: args)
+}
+
 // The menu bar hides the way System Settings > Control Center > "Automatically hide and show the menu
 // bar" does: the setting, then the notice every app and the Dock act on.
 func menuBar(hidden: Bool) {
+  print("menu bar \(hidden ? "hidden" : "shown")")
   CFPreferencesSetValue("_HIHideMenuBar" as CFString, hidden as CFBoolean, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
   CFPreferencesAppSynchronize(kCFPreferencesAnyApplication)
   DistributedNotificationCenter.default().postNotificationName(.init("AppleInterfaceMenuBarHidingChangedNotification"), object: nil, userInfo: nil, deliverImmediately: true)
   // dinky does not notice the screen growing or shrinking by the menu bar, so it lays the windows out again.
   DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-    try? Process.run(URL(fileURLWithPath: NSHomeDirectory() + "/.local/bin/dinky"), arguments: ["retile"])
+    dinky(["retile"])
   }
 }
 
@@ -345,6 +354,7 @@ func connect() {
 if !AXIsProcessTrusted() {
   print("sofa-receiver: no Accessibility permission yet; input will be ignored until it is granted")
 }
+setvbuf(stdout, nil, _IOLBF, 0) // the log is a file: a line at a time, not when a buffer fills
 streaming = readLog() ?? false
 print("sofa-receiver: Sunshine \(streaming ? "streaming" : "idle"), dialing \(hubHost):\(hubPort)")
 connect()
