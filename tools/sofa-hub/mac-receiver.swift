@@ -1,7 +1,7 @@
 // sofa-hub's receiver on the Mac. Dials the hub on omarchypc over Tailscale, tells it when this
 // Mac's Sunshine is streaming, and replays the keys and trackpad input it gets as real Mac input.
 // Every 5 s it also sends this Mac's stats for the Sofa app's list of computers; asked, a preview of the
-// screen (needs Screen Recording), or it restarts the Mac (fdesetup authrestart, setup-mac-restart.sh).
+// screen (needs Screen Recording), a test tone, or it restarts the Mac (fdesetup authrestart, setup-mac-restart.sh).
 // Needs Accessibility permission. Build: swiftc -O mac-receiver.swift -o ~/.local/bin/sofa-receiver
 import AppKit
 import Foundation
@@ -319,6 +319,8 @@ func handle(_ line: Substring) {
   case "reset": resetAll()
   case "preview": statsQueue.async { preview() }
   case "restart": DispatchQueue.global().async { restart() }
+  case "ping": say("pong \(m["id"] as? Int ?? 0)") // the hub times the input path with these
+  case "tone": tone(seconds: min(max(d("seconds"), 1), 30))
   default: break
   }
 }
@@ -465,7 +467,15 @@ func stats() -> [String: Any] {
     "apps": screenApps(),
     "os": "macos",
     "pressure": memoryPressure(),
+    "display": displayFacts(),
   ]
+}
+
+/// The main display's pixels, the scale it is drawn at and the size it looks (points), for the Sofa app.
+func displayFacts() -> [String: Any] {
+  guard let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()), mode.width > 0 else { return [:] }
+  let scale = (Double(mode.pixelWidth) / Double(mode.width) * 100).rounded() / 100
+  return ["pixels": [mode.pixelWidth, mode.pixelHeight], "scale": scale, "looks": [mode.width, mode.height]]
 }
 
 /// The kernel's memory pressure, as Activity Monitor's graph colours it: 1 normal, 2 warn, 4 critical.
@@ -535,6 +545,42 @@ func run(_ path: String, _ args: [String], input: Data? = nil) -> String? {
   let data = out.fileHandleForReading.readDataToEndOfFile()
   p.waitUntilExit()
   return p.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
+}
+
+// MARK: - Test tone, asked from the Sofa app
+
+var tonePlayer: Process?
+
+/// A steady 440 Hz sine at -12 dBFS with 10 ms fades, 16-bit stereo, played with afplay on the default output.
+func tone(seconds: Double) {
+  let rate = 48_000, frames = Int(seconds * Double(rate)), fade = rate / 100
+  let amp = 32767 * pow(10, -12.0 / 20)
+  var data = Data()
+  func u32(_ v: Int) { withUnsafeBytes(of: UInt32(v).littleEndian) { data.append(contentsOf: $0) } }
+  func u16(_ v: Int) { withUnsafeBytes(of: UInt16(v).littleEndian) { data.append(contentsOf: $0) } }
+  data.append(contentsOf: Array("RIFF".utf8)); u32(36 + frames * 4)
+  data.append(contentsOf: Array("WAVEfmt ".utf8)); u32(16); u16(1); u16(2); u32(rate); u32(rate * 4); u16(4); u16(16)
+  data.append(contentsOf: Array("data".utf8)); u32(frames * 4)
+  var samples = [Int16](repeating: 0, count: frames * 2)
+  for i in 0..<frames {
+    let gain = min(1, Double(i) / Double(fade), Double(frames - 1 - i) / Double(fade))
+    let s = Int16((amp * gain * sin(2 * Double.pi * 440 * Double(i) / Double(rate))).rounded())
+    samples[2 * i] = s.littleEndian
+    samples[2 * i + 1] = s.littleEndian
+  }
+  samples.withUnsafeBytes { data.append(contentsOf: $0) }
+  let path = NSTemporaryDirectory() + "sofa-tone.wav"
+  guard (try? data.write(to: URL(fileURLWithPath: path))) != nil else { return say("tone-failed write") }
+  tonePlayer?.terminate()
+  let p = Process()
+  p.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
+  p.arguments = [path]
+  guard (try? p.run()) != nil else { return say("tone-failed afplay") }
+  tonePlayer = p
+  // Still running after a moment: playing.
+  DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+    say(p.isRunning || p.terminationStatus == 0 ? "tone-ok" : "tone-failed afplay exit \(p.terminationStatus)")
+  }
 }
 
 // MARK: - Restart, asked from the Sofa app
