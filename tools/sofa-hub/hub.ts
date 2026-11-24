@@ -138,6 +138,7 @@ const mac = new MacLink(
   Number(process.env.SOFA_MAC_PORT ?? 47901),
   (process.env.SOFA_MAC_PEERS ?? "100.114.79.7").split(","), // mbp13 over Tailscale
   (on) => {
+    if (!on) streamEnded();
     macStreamed = on && (macStreamed || fromSofa()); // a stream the sofa was on stays the sofa's
     if (on && !macStreamed) console.log("mac: streamed, but not from the sofa; the keyboard stays on the Apple TV");
     decide();
@@ -150,17 +151,28 @@ const macPad = new MacTrackpad((m) => mac.send(m), Number(process.env.SOFA_MAC_T
 const WAKE_AFTER_MS = 2 * 60_000;
 let lastTvKeyAt = 0;
 const ESC_HOLD_MS = 5000;
+const ESC_TAPS = 3; // or three quick taps
+const ESC_TAPS_MS = 900;
 let escDown = false;
 let escTimer: Timer | undefined;
+let escTaps: number[] = [];
+let homeFallback: Timer | undefined;
+const press = (hid: number) => void tv.button(hid, true).then(() => tv.button(hid, false));
 
-function leaveStream(): void {
-  console.log("esc held: back to the Apple TV");
+// Back to the Apple TV: Menu, which the Sofa app takes as "leave the stream" and so lands on its list of
+// computers. Should the stream still be up a moment later (the app took Menu for the stream's own Esc),
+// Home leaves the app instead.
+function leaveStream(why: string): void {
+  console.log(`${why}: back to the Apple TV`);
   if (mode === "mac") mac.send({ t: "key", code: KEY.ESC, down: false });
   desktopStreamed = false;
   macStreamed = false;
   decide();
-  void tv.button(HID.Home, true).then(() => tv.button(HID.Home, false));
+  press(HID.Menu);
+  clearTimeout(homeFallback);
+  homeFallback = setTimeout(() => (console.log("stream still up after Menu: Home"), press(HID.Home)), 2500);
 }
+const streamEnded = () => clearTimeout(homeFallback);
 
 function onKeyboard(events: InputEvent[]): void {
   for (const { type, code, value } of events) {
@@ -174,11 +186,14 @@ function onKeyboard(events: InputEvent[]): void {
     else if (value === 1) lastKeyAt = Date.now();
     if (value === 1) lastSofaInputAt = Date.now();
 
-    // Esc held ESC_HOLD_MS in a stream: back to the Apple TV, where Home leaves the Sofa app and so
-    // its stream. The keyboard is grabbed only once Esc is up, so the desktop never keeps it held.
+    // Esc tapped three times quickly, or held ESC_HOLD_MS, in a stream: back to the Apple TV. The keyboard
+    // is grabbed only once Esc is up, so the desktop never keeps it held.
     if (code === KEY.ESC && value === 1 && mode !== "tv") {
       escDown = true;
-      escTimer = setTimeout(leaveStream, ESC_HOLD_MS);
+      escTimer = setTimeout(() => leaveStream("esc held"), ESC_HOLD_MS);
+      const now = Date.now();
+      escTaps = [...escTaps.filter((t) => now - t < ESC_TAPS_MS), now];
+      if (escTaps.length >= ESC_TAPS) (escTaps = []), clearTimeout(escTimer), leaveStream("esc tapped three times");
     } else if (code === KEY.ESC && value === 0) {
       clearTimeout(escTimer);
       if (escDown) (escDown = false), regrab();
@@ -294,6 +309,7 @@ function followSunshine(): void {
       for (const line of lines) {
         const next = streamMode(line);
         if (!next) continue;
+        if (next !== "desktop") streamEnded();
         desktopStreamed = next === "desktop" && fromSofa();
         if (next === "desktop" && !desktopStreamed) console.log("desktop: streamed, but not from the sofa; the keyboard stays on the Apple TV");
         if (desktopStreamed) tvDisplay();

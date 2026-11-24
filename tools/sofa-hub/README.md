@@ -14,8 +14,9 @@ and trackpad belong to the desktop. Runs on omarchypc as a systemd user service.
   starts on the Apple TV too.
 - **In a stream:** the desktop gets a copy of the trackpad with palms filtered out touch by touch
   (`palm.ts`): a touch that lands within 0.3 s of a key, or grows palm-sized, is dropped until lifted.
-- **Leaving a stream:** hold Esc for 5 s: the keyboard goes back to the Apple TV, and Home
-  there leaves the Sofa app and its stream.
+- **Leaving a stream:** tap Esc three times quickly (or hold it 5 s): the keyboard goes back to the
+  Apple TV, and Menu there ends the stream on the Sofa app's list of computers. If the stream is still
+  up 2.5 s later, Home leaves the app instead.
 - **By hand:** Caps+Esc, or `bun hub.ts mode tv|desktop|toggle`.
 
 ## Install
