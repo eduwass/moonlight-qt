@@ -7,6 +7,7 @@ import AppKit
 import CoreWLAN
 import Foundation
 import ImageIO
+import ScreenCaptureKit
 import Network
 import SystemConfiguration
 
@@ -578,32 +579,43 @@ func memoryPressure() -> String {
 
 // MARK: - Preview of the screen, for the Sofa app's list of computers
 
-/// The main display as a JPEG about 640 px wide, base64, under 150 KB; or why there is none.
+/// The main display as a JPEG about 640 px wide, base64, under 150 KB; or why there is none. Taken with
+/// ScreenCaptureKit in this process: without Screen Recording it fails outright. (The `screencapture` tool
+/// it replaces returned just the desktop picture then, which the app showed as if it were the screen.)
 func preview() {
   guard CGPreflightScreenCaptureAccess() else {
     _ = CGRequestScreenCaptureAccess() // puts the receiver in System Settings' Screen Recording list, to turn on
     say("preview-failed no-permission")
     return
   }
-  let path = NSTemporaryDirectory() + "sofa-preview.jpg"
-  defer { try? FileManager.default.removeItem(atPath: path) }
-  guard run("/usr/sbin/screencapture", ["-x", "-m", "-t", "jpg", path]) != nil,
-    let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
-    let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-      kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 640,
-    ] as CFDictionary)
-  else { return say("preview-failed capture") }
-  // Without the permission, or with the display asleep, the picture comes back black.
-  if isBlack(image) { return say("preview-failed no-permission") }
-  for quality in [0.7, 0.5, 0.35] {
-    let data = NSMutableData()
-    guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { break }
-    CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-    guard CGImageDestinationFinalize(dest) else { break }
-    let base64 = (data as Data).base64EncodedString()
-    if base64.count <= 150_000 { return say("preview " + base64) }
+  Task.detached {
+    do {
+      let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+      guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first
+      else { return say("preview-failed capture") }
+      let config = SCStreamConfiguration()
+      config.width = 640
+      config.height = max(1, Int((640 * Double(display.height) / Double(max(display.width, 1))).rounded()))
+      config.showsCursor = false
+      // Plain 8-bit sRGB: the default follows the display, and its wide or 10-bit pixels came out green and striped.
+      config.pixelFormat = kCVPixelFormatType_32BGRA
+      config.colorSpaceName = CGColorSpace.sRGB
+      let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: []), configuration: config)
+      // With the display asleep the picture comes back black.
+      if isBlack(image) { return say("preview-failed asleep") }
+      for quality in [0.7, 0.5, 0.35] {
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { break }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { break }
+        let base64 = (data as Data).base64EncodedString()
+        if base64.count <= 150_000 { return say("preview " + base64) }
+      }
+      say("preview-failed too-big")
+    } catch {
+      say("preview-failed no-permission")
+    }
   }
-  say("preview-failed too-big")
 }
 
 func isBlack(_ image: CGImage) -> Bool {

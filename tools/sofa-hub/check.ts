@@ -193,7 +193,7 @@ equal(tvVolumeKey(KEY.VOLUMEDOWN, { ...none, shift: true }), null, "with a modif
   equal(pathMs([40, 10, 12, 11, 500]), 6, "half the median round trip");
   equal(pathMs([]), null);
   deepEqual(macDisplayFacts({ pixels: [2880, 1800], scale: 2, looks: [1440, 900] }), {
-    pixels: [2880, 1800], scale: 2, looks: [1440, 900], modes: [], sizes: [], tryable: false, why: "needs Screen Recording on MBP13",
+    pixels: [2880, 1800], scale: 2, looks: [1440, 900], modes: [], sizes: [], tryable: false, why: "trying sizes on the Mac isn't built yet",
   });
   equal(sunshineStreaming("[a]: Info: CLIENT CONNECTED\n[b]: Info: CLIENT DISCONNECTED\n"), false);
   equal(sunshineStreaming("[b]: Info: CLIENT DISCONNECTED\n[c]: Info: CLIENT CONNECTED\n[d]: Info: x"), true);

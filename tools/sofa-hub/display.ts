@@ -68,7 +68,7 @@ export const macDisplayFacts = (d: Display): Display => ({
   modes: [],
   sizes: [],
   tryable: false,
-  why: "needs Screen Recording on MBP13",
+  why: "trying sizes on the Mac isn't built yet",
 });
 
 /** The input path's one-way time from round trips: half their median, rounded (null with none). */
