@@ -135,6 +135,16 @@ const macPad = new MacTrackpad((m) => mac.send(m), Number(process.env.SOFA_MAC_T
 
 const WAKE_AFTER_MS = 2 * 60_000;
 let lastTvKeyAt = 0;
+const ESC_HOLD_MS = 5000;
+let escDownAt = 0;
+
+function leaveStream(): void {
+  console.log("esc held: back to the Apple TV");
+  desktopStreamed = false;
+  macStreamed = false;
+  setMode("tv");
+  void tv.button(HID.Home, true).then(() => tv.button(HID.Home, false));
+}
 
 function onKeyboard(events: InputEvent[]): void {
   for (const { type, code, value } of events) {
@@ -147,6 +157,18 @@ function onKeyboard(events: InputEvent[]): void {
     else if (code === KEY.LEFTSHIFT || code === KEY.RIGHTSHIFT) mods.shift = down;
     else if (value === 1) lastKeyAt = Date.now();
     if (value === 1) lastSofaInputAt = Date.now();
+
+    // Esc held ESC_HOLD_MS in a stream, then let go: back to the Apple TV, where Home leaves the Sofa
+    // app and so its stream. On the release, so the desktop has had its Esc up before the hub grabs.
+    if (code === KEY.ESC && mode !== "tv" && value !== 2) {
+      const held = value === 0 && escDownAt > 0 && Date.now() - escDownAt >= ESC_HOLD_MS;
+      escDownAt = value === 1 ? Date.now() : 0;
+      if (held) {
+        if (mode === "mac") mac.send({ t: "key", code, down: false });
+        leaveStream();
+        continue;
+      }
+    }
 
     if (value === 1 && isModeToggle(code, mods)) {
       setMode(mode === "tv" ? "desktop" : "tv");
