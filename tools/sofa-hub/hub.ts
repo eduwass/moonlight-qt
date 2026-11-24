@@ -138,7 +138,7 @@ const mac = new MacLink(
   Number(process.env.SOFA_MAC_PORT ?? 47901),
   (process.env.SOFA_MAC_PEERS ?? "100.114.79.7").split(","), // mbp13 over Tailscale
   (on) => {
-    macStreamed = on && fromSofa();
+    macStreamed = on && (macStreamed || fromSofa()); // a stream the sofa was on stays the sofa's
     if (on && !macStreamed) console.log("mac: streamed, but not from the sofa; the keyboard stays on the Apple TV");
     decide();
   },

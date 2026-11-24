@@ -28,10 +28,12 @@ const DOUBLE_TAP_MS = 400;
 const TAP_MS = 200; // a touch shorter than this, that barely moved, is a tap: one finger clicks, two right-click
 const TAP_UNITS = 3 * RES;
 const TAP_TO_CLICK = process.env.SOFA_MAC_TAP === "1"; // off by default: press to click, like the MacBooks
+const RECONNECT_GRACE_MS = 10_000;
 
 /** The receiver's connection. Only peers in `allowed` may connect; one at a time. */
 export class MacLink {
   private socket: Socket<undefined> | null = null;
+  private goneTimer: Timer | undefined;
 
   constructor(hostname: string, port: number, allowed: string[], onStreaming: (on: boolean) => void) {
     Bun.listen({
@@ -43,6 +45,7 @@ export class MacLink {
           this.socket?.end();
           this.socket = s;
           s.setNoDelay?.(true);
+          clearTimeout(this.goneTimer);
           console.log(`mac: receiver connected from ${s.remoteAddress}`);
         },
         data: (s, data) => {
@@ -56,7 +59,9 @@ export class MacLink {
           if (s !== this.socket) return;
           this.socket = null;
           console.log("mac: receiver gone");
-          onStreaming(false);
+          // A receiver restarting (a deploy, a Wi-Fi blip) is back within seconds and says where the
+          // stream is; only one that stays away ends it.
+          this.goneTimer = setTimeout(() => onStreaming(false), RECONNECT_GRACE_MS);
         },
       },
     });
