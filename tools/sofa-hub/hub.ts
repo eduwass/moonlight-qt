@@ -378,7 +378,8 @@ function onRequest(m: Record<string, unknown>): void {
     // The app listens on `port`; the computer sends it bytes for `seconds`, so the measure is its own path.
     const port = Number(m.port), seconds = Math.min(Math.max(Number(m.seconds) || 4, 1), 10);
     const addr = app.address;
-    const reply = (ok: boolean, more: object) => app.send({ t: "speed", host, ok, ...more });
+    const reply = (ok: boolean, more: object) => (console.log(`speed: ${host}: ${JSON.stringify(more)}`), app.send({ t: "speed", host, ok, ...more }));
+    console.log(`speed: ${host} to ${addr}:${port} for ${seconds} s`);
     if (!addr || !Number.isInteger(port) || port < 1 || port > 65535) return reply(false, { error: "bad request" });
     if (here) return void sendSpeed(addr, port, seconds).then((bytes) => reply(true, { bytes }), (e) => reply(false, { error: (e as Error).message }));
     if (host.toLowerCase() !== macName().toLowerCase()) return reply(false, { error: `no computer called ${host}` });
@@ -447,6 +448,7 @@ function onMacLine(line: string): void {
     const [seq, x, y, w, h] = rest.split(" ").map(Number);
     if (settings.instantCursor && app.screen === "stream" && [seq, x, y, w, h].every(Number.isFinite)) app.send({ t: "cursorAt", seq, x, y, w, h });
   } else if (word === "speed-done" || word === "speed-failed") {
+    console.log(`speed: ${macName()}: ${line}`);
     app.send({ t: "speed", host: macName(), ok: word === "speed-done", ...(word === "speed-done" ? { bytes: Number(rest) || 0 } : { error: rest || "failed" }) });
   } else if (word === "pong") {
     pongs.get(Number(rest))?.();
