@@ -6,7 +6,7 @@
 //   bun hub.ts                  run the hub (the systemd user service does this)
 //   bun hub.ts mode tv|desktop|mac|toggle    tell the running hub where input goes
 //   bun hub.ts pair             pair with the Apple TV once (type the PIN it shows)
-import { existsSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { AppleTv } from "./appletv.ts";
 import { EV_KEY, InputDevice, deviceId, findEventNode, type InputEvent } from "./evdev.ts";
 import { HID, KEY, type Modifiers, isModeToggle, keyToHid, repeats } from "./keys.ts";
@@ -71,7 +71,13 @@ let lastSofaInputAt = 0;
 const fromSofa = () => Date.now() - lastSofaInputAt < SOFA_CLAIM_MS;
 let desktopStreamed = false;
 let macStreamed = false;
-const decide = () => setMode(desktopStreamed ? "desktop" : macStreamed ? "mac" : "tv");
+// The streams being watched outlive a restart of the hub (a deploy), so input stays where it was.
+// ponytail: a stream that ends while the hub is down is missed; holding Esc 5 s gets back to the Apple TV.
+const STATE = `${process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.()}`}/sofa-hub-streams.json`;
+const decide = () => {
+  void Bun.write(STATE, JSON.stringify({ desktopStreamed, macStreamed }));
+  setMode(desktopStreamed ? "desktop" : macStreamed ? "mac" : "tv");
+};
 
 function releaseAll(): void {
   for (const hid of held.values()) void tv.button(hid, false);
@@ -146,7 +152,7 @@ function leaveStream(): void {
   if (mode === "mac") mac.send({ t: "key", code: KEY.ESC, down: false });
   desktopStreamed = false;
   macStreamed = false;
-  setMode("tv");
+  decide();
   void tv.button(HID.Home, true).then(() => tv.button(HID.Home, false));
 }
 
@@ -293,7 +299,12 @@ function followSunshine(): void {
 
 scan();
 setInterval(scan, 2000); // the trackpad gets a new event node every time it wakes from sleep
-// Started mid-stream, the hub cannot tell who is watching, so it starts on the Apple TV (Caps+Esc to switch).
+// Restarted mid-stream it picks up the streams it was following; started afresh (after a boot), the
+// Apple TV.
+try {
+  ({ desktopStreamed, macStreamed } = JSON.parse(readFileSync(STATE, "utf8")));
+  if (desktopStreamed || macStreamed) lastSofaInputAt = Date.now(); // so the Mac's "streaming" on reconnect counts
+} catch {}
 if (process.env.SOFA_START_MODE) setMode(process.env.SOFA_START_MODE as Mode);
 else decide();
 followSunshine();
