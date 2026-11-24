@@ -20,6 +20,7 @@ sudo install -Dm644 system/hid_apple.conf /etc/modprobe.d/hid_apple.conf
 sudo install -Dm644 system/local-overrides.quirks /etc/libinput/local-overrides.quirks
 sudo udevadm control --reload && sudo udevadm trigger -s input
 echo 1 | sudo tee /sys/module/hid_apple/parameters/fnmode >/dev/null 2>&1 || true
+sudo ufw allow proto tcp from 192.168.68.67 to any port 47902 comment sofa-app >/dev/null # the Apple TV's Sofa app (hub.ts)
 nmcli radio wifi off 2>/dev/null || sudo nmcli radio wifi off || true # wired; Wi-Fi only crowds the Bluetooth band
 
 echo "== hub"
