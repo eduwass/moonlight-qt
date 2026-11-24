@@ -52,7 +52,7 @@ equal(tvVolumeKey(KEY.VOLUMEDOWN, { ...none, shift: true }), null, "with a modif
     screenApps([
       w("com.mitchellh.ghostty", "~", 1),
       w("helium", "Recents · Paper - https://app.paper.design/ - Helium", 0),
-      w("helium", "Other tab - Helium", 2),
+      w("helium", "Other tab - Helium - edu", 2),
       w("obsidian", "notes", 3, { visible: false }),
       w("spotify", "x", 4),
     ]),
@@ -64,6 +64,7 @@ equal(tvVolumeKey(KEY.VOLUMEDOWN, { ...none, shift: true }), null, "with a modif
     { kind: "trackpad", name: "Magic Trackpad", connected: false, battery: 98 },
   ]);
   equal(sofaDevices({}, { keyboard: false, trackpad: false })[0]!.battery, null, "no battery while it is off");
+  deepEqual(screenApps([w("helium", "Tab - Helium - edu", 0)]), ["Helium — Tab"], "the profile name goes too");
   equal(parseHost('{"name":"MBP13","apps":[],"addresses":[]}')?.name, "MBP13");
   equal(parseHost('{"apps":[]}'), null);
   equal(parseHost("nope"), null);

@@ -1,9 +1,11 @@
 // sofa-hub's receiver on the Mac. Dials the hub on omarchypc over Tailscale, tells it when this
 // Mac's Sunshine is streaming, and replays the keys and trackpad input it gets as real Mac input.
+// Every 5 s it also sends this Mac's stats for the Sofa app's list of computers.
 // Needs Accessibility permission. Build: swiftc -O mac-receiver.swift -o ~/.local/bin/sofa-receiver
 import AppKit
 import Foundation
 import Network
+import SystemConfiguration
 
 let hubHost = ProcessInfo.processInfo.environment["SOFA_HUB_HOST"] ?? "omarchypc"
 let hubPort = NWEndpoint.Port(rawValue: UInt16(ProcessInfo.processInfo.environment["SOFA_HUB_PORT"] ?? "47901")!)!
@@ -343,6 +345,123 @@ func readLog() -> Bool? {
   return streamState(Substring(String(decoding: data, as: UTF8.self)))
 }
 
+// MARK: - Stats for the Sofa app's list of computers (the same shape as the hub's Host, stats.ts)
+
+let statsQueue = DispatchQueue(label: "stats")
+var lastTicks = cpuTicks()
+
+/// Busy and total CPU ticks since boot, all cores.
+func cpuTicks() -> (busy: UInt64, total: UInt64) {
+  var info = host_cpu_load_info()
+  var count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info>.stride / MemoryLayout<integer_t>.stride)
+  let ok = withUnsafeMutablePointer(to: &info) {
+    $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count) }
+  } == KERN_SUCCESS
+  guard ok else { return (0, 0) }
+  let (user, system, idle, nice) = (UInt64(info.cpu_ticks.0), UInt64(info.cpu_ticks.1), UInt64(info.cpu_ticks.2), UInt64(info.cpu_ticks.3))
+  return (user + system + nice, user + system + idle + nice)
+}
+
+/// Used memory as Activity Monitor counts it: active, wired and compressed pages.
+func memoryUsed() -> UInt64 {
+  var vm = vm_statistics64()
+  var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.stride / MemoryLayout<integer_t>.stride)
+  let ok = withUnsafeMutablePointer(to: &vm) {
+    $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count) }
+  } == KERN_SUCCESS
+  return ok ? (UInt64(vm.active_count) + UInt64(vm.wire_count) + UInt64(vm.compressor_page_count)) * UInt64(vm_kernel_page_size) : 0
+}
+
+func swapUsage() -> (used: UInt64, total: UInt64) {
+  var usage = xsw_usage()
+  var size = MemoryLayout<xsw_usage>.size
+  return sysctlbyname("vm.swapusage", &usage, &size, nil, 0) == 0 ? (usage.xsu_used, usage.xsu_total) : (0, 0)
+}
+
+func uptime() -> Int {
+  var boot = timeval()
+  var size = MemoryLayout<timeval>.size
+  return sysctlbyname("kern.boottime", &boot, &size, nil, 0) == 0 ? Int(Date().timeIntervalSince1970) - boot.tv_sec : 0
+}
+
+/// The LAN and Tailscale IPv4 addresses.
+func ipv4Addresses() -> [String] {
+  var out: [String] = []
+  var first: UnsafeMutablePointer<ifaddrs>?
+  guard getifaddrs(&first) == 0 else { return [] }
+  defer { freeifaddrs(first) }
+  var next = first
+  while let i = next {
+    next = i.pointee.ifa_next
+    let flags = Int32(i.pointee.ifa_flags)
+    guard let sa = i.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET), flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0 else { continue }
+    var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+    guard getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+    let address = String(cString: host)
+    if !address.hasPrefix("169.254.") && !out.contains(address) { out.append(address) }
+  }
+  return out
+}
+
+/// The title of an app's front window, through Accessibility; a hung app gets a quarter of a second.
+func frontWindowTitle(_ pid: pid_t) -> String? {
+  let app = AXUIElementCreateApplication(pid)
+  AXUIElementSetMessagingTimeout(app, 0.25)
+  var window: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success
+    || AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute as CFString, &window) == .success,
+    let window, CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
+  var title: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &title) == .success,
+    let text = title as? String, !text.isEmpty else { return nil }
+  // "<tab> - Helium", or "<tab> - Helium - <profile>"
+  return text.range(of: " - Helium", options: .backwards).map { String(text[..<$0.lowerBound]) } ?? text
+}
+
+/// The apps with a window on screen, the frontmost first, then front to back; Helium with its tab.
+func screenApps(max: Int = 5) -> [String] {
+  var pids: [pid_t] = []
+  if let front = NSWorkspace.shared.frontmostApplication?.processIdentifier { pids.append(front) }
+  let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+  for w in windows where (w[kCGWindowLayer as String] as? Int) == 0 {
+    if let pid = w[kCGWindowOwnerPID as String] as? Int { pids.append(pid_t(pid)) }
+  }
+  var seen = Set<pid_t>()
+  var out: [String] = []
+  for pid in pids where !seen.contains(pid) && out.count < max {
+    seen.insert(pid)
+    guard let app = NSRunningApplication(processIdentifier: pid), app.activationPolicy == .regular, !app.isHidden,
+      let name = app.localizedName else { continue }
+    out.append(name == "Helium" ? frontWindowTitle(pid).map { "Helium — \($0)" } ?? name : name)
+  }
+  return out
+}
+
+func stats() -> [String: Any] {
+  let ticks = cpuTicks()
+  let busy = ticks.total > lastTicks.total ? Double(ticks.busy - lastTicks.busy) / Double(ticks.total - lastTicks.total) : 0
+  lastTicks = ticks
+  let disk = try? URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey])
+  let diskTotal = Int64(disk?.volumeTotalCapacity ?? 0)
+  var name = [CChar](repeating: 0, count: 256)
+  gethostname(&name, name.count)
+  let swap = swapUsage()
+  return [
+    "name": SCDynamicStoreCopyLocalHostName(nil) as String? ?? "Mac",
+    "hostname": String(cString: name),
+    "addresses": ipv4Addresses(),
+    "cpu": NSDecimalNumber(string: String(format: "%.1f", busy * 100)), // one decimal in the JSON too
+    "memUsed": memoryUsed(),
+    "memTotal": ProcessInfo.processInfo.physicalMemory,
+    "swapUsed": swap.used,
+    "swapTotal": swap.total,
+    "diskUsed": diskTotal - (disk?.volumeAvailableCapacityForImportantUsage ?? 0),
+    "diskTotal": diskTotal,
+    "uptime": uptime(),
+    "apps": screenApps(),
+  ]
+}
+
 // MARK: - The hub connection
 
 var connection: NWConnection?
@@ -399,4 +518,12 @@ Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { _ in
     say(now ? "streaming" : "idle")
   }
 }
+// Off the main thread, so a slow Accessibility answer never holds up input.
+let statsTimer = DispatchSource.makeTimerSource(queue: statsQueue)
+statsTimer.schedule(deadline: .now() + 5, repeating: 5)
+statsTimer.setEventHandler {
+  guard let json = try? JSONSerialization.data(withJSONObject: stats(), options: [.withoutEscapingSlashes]) else { return }
+  say("stats " + String(decoding: json, as: UTF8.self))
+}
+statsTimer.resume()
 RunLoop.main.run()

@@ -67,7 +67,7 @@ export function screenApps(clients: Client[], max = 5): string[] {
     const name = appName(c.class);
     if (seen.has(name)) continue;
     seen.add(name);
-    apps.push(name === "Helium" && c.title ? `Helium — ${c.title.replace(/ - Helium$/, "")}` : name);
+    apps.push(name === "Helium" && c.title ? `Helium — ${c.title.replace(/ - Helium( - .*)?$/, "")}` : name);
   }
   return apps.slice(0, max);
 }
