@@ -326,7 +326,9 @@ streaming = readLog() ?? false
 print("sofa-receiver: Sunshine \(streaming ? "streaming" : "idle"), dialing \(hubHost):\(hubPort)")
 connect()
 Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { _ in
-  if let now = readLog(), now != streaming {
+  // Every new connection is said, not only changes: Sunshine does not always log the end of a
+  // stream that dropped, and the hub decides afresh on each one whether the sofa is watching.
+  if let now = readLog(), now || now != streaming {
     streaming = now
     print("Sunshine \(now ? "streaming" : "idle")")
     say(now ? "streaming" : "idle")
