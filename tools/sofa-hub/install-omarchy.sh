@@ -26,6 +26,10 @@ nmcli radio wifi off 2>/dev/null || sudo nmcli radio wifi off || true # wired; W
 echo "== hub"
 mkdir -p "$dir"
 cp ./*.ts "$dir/"
+# The commit the Sofa app sees in the hub's hello ("+" when this folder has changes not committed).
+version=$(git rev-parse --short HEAD 2>/dev/null || echo dev)
+[ "$version" = dev ] || git diff --quiet HEAD -- . || version="$version+"
+echo "$version" > "$dir/VERSION"
 if [ ! -d "$dir/bunatv" ]; then
   git clone -q https://github.com/JarekToro/bunatv.git "$dir/bunatv" # Apple TV Companion protocol; alpha, unlicensed
 fi
