@@ -78,6 +78,12 @@ const decide = () => {
   void Bun.write(STATE, JSON.stringify({ desktopStreamed, macStreamed }));
   setMode(desktopStreamed ? "desktop" : macStreamed ? "mac" : "tv");
 };
+// A choice by hand (Caps+Esc, `bun hub.ts mode`) stands until the next stream starts or ends.
+const choose = (next: Mode) => {
+  desktopStreamed = next === "desktop";
+  macStreamed = next === "mac";
+  decide();
+};
 
 function releaseAll(): void {
   for (const hid of held.values()) void tv.button(hid, false);
@@ -179,7 +185,7 @@ function onKeyboard(events: InputEvent[]): void {
     }
 
     if (value === 1 && isModeToggle(code, mods)) {
-      setMode(mode === "tv" ? "desktop" : "tv");
+      choose(mode === "tv" ? "desktop" : "tv");
       continue;
     }
     if (mode === "mac") {
@@ -240,8 +246,8 @@ Bun.listen({
   socket: {
     data(socket, data) {
       const wanted = data.toString().trim();
-      if (wanted === "toggle") setMode(mode === "tv" ? "desktop" : "tv");
-      else if (wanted === "tv" || wanted === "desktop" || wanted === "mac") setMode(wanted);
+      if (wanted === "toggle") choose(mode === "tv" ? "desktop" : "tv");
+      else if (wanted === "tv" || wanted === "desktop" || wanted === "mac") choose(wanted);
       socket.write(`mode: ${mode}\n`);
       socket.end();
     },
