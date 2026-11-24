@@ -7,6 +7,11 @@ set -euo pipefail
 cd "$(dirname "$0")"
 dir=~/.local/share/sofa-hub
 
+# Restarting the hub mid-stream takes the keyboard and trackpad away from whoever is on the sofa.
+if [ -z "${FORCE:-}" ] && grep -q true "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sofa-hub-streams.json" 2>/dev/null; then
+  echo "!! a stream is being watched from the sofa; not restarting the hub (FORCE=1 to anyway)"; exit 1
+fi
+
 echo "== system files (sudo)"
 sudo install -Dm644 system/70-sofa-hub.rules /etc/udev/rules.d/70-sofa-hub.rules
 sudo install -Dm644 system/81-disable-internal-bt.rules /etc/udev/rules.d/81-disable-internal-bt.rules

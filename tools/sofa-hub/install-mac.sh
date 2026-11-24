@@ -10,6 +10,12 @@ bin=~/.local/bin/sofa-receiver
 kc=~/Library/Keychains/sofa-signing.keychain-db
 plist=~/Library/LaunchAgents/dev.eduwass.sofa-receiver.plist
 
+# Restarting the receiver mid-stream drops the sofa's input on this Mac.
+last=$(grep -hE "CLIENT (DIS)?CONNECTED|ScreenCaptureKit: stopped" ~/.config/sunshine/sunshine.log 2>/dev/null | tail -1)
+if [ -z "${FORCE:-}" ] && [[ $last == *"CLIENT CONNECTED"* ]]; then
+  echo "!! this Mac is being streamed; not restarting the receiver (FORCE=1 to anyway)"; exit 1
+fi
+
 mkdir -p ~/.local/bin
 swiftc -O mac-receiver.swift -o "$bin.new"
 if [ -f "$kc" ] && [ -f ~/.config/sofa-receiver/keychain-pass ]; then
