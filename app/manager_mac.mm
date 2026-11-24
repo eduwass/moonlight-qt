@@ -165,6 +165,7 @@ static void tellStream(NSString* name, NSString* what)
 @public
     bool asked, online, busy;
     int ms;
+    NSString* at; // where it answered (retained)
 }
 @end
 @implementation DeviceStatus
@@ -196,7 +197,8 @@ static void tellStream(NSString* name, NSString* what)
     NSTextField* screenshot;
     NSTextField* before;
     NSTextField* clipboard;
-    NSMutableDictionary<NSString*, DeviceStatus*>* statuses; // by address
+    NSMutableDictionary<NSString*, DeviceStatus*>* statuses; // by device name
+    NSMutableDictionary<NSString*, NSString*>* reached;     // by device name: where its "before connecting" command last sent its stream
     NSMutableDictionary<NSString*, NSImage*>* pictures;       // by device name
     NSMutableDictionary<NSString*, NSDate*>* pictureTimes;
     NSMutableSet<NSString*>* running; // the devices with a stream open or warm, as of the last look
@@ -287,7 +289,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 - (NSView*)tableView:(NSTableView*)tableView viewForTableColumn:(NSTableColumn*)column row:(NSInteger)row
 {
     NSDictionary* device = s_Devices[row];
-    DeviceStatus* status = statuses[device[@"address"] ?: @""];
+    DeviceStatus* status = statuses[device[@"name"] ?: @""];
     CGFloat wide = MAX(150, column.width);
     NSTableCellView* cell = [[[NSTableCellView alloc] initWithFrame:NSMakeRect(0, 0, wide, 40)] autorelease];
 
@@ -369,7 +371,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         clipboard.stringValue = device[@"clipboard"] ?: @"";
     }
 
-    DeviceStatus* status = statuses[device[@"address"] ?: @""];
+    DeviceStatus* status = statuses[device[@"name"] ?: @""];
     bool streaming = [running containsObject:deviceName];
     endStream.hidden = !streaming;
     if (status == nil || !status->asked) {
@@ -379,7 +381,8 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         statusLine.stringValue = @"Not answering. Asleep, off, or not reachable from this network.";
     }
     else {
-        statusLine.stringValue = [NSString stringWithFormat:@"Online · answers in %d ms · %@", status->ms,
+        statusLine.stringValue = [NSString stringWithFormat:@"Online · answers in %d ms%@ · %@", status->ms,
+                                  status->at != nil && ![status->at isEqualToString:device[@"address"] ?: @""] ? [@" at " stringByAppendingString:status->at] : @"",
                                   streaming ? @"streaming to this Mac" : status->busy ? @"a stream is open on it" : @"ready"];
     }
     connect.title = streaming ? @"Show Window" : @"Connect";
@@ -517,40 +520,62 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
         [table selectRowIndexes:[NSIndexSet indexSetWithIndex:selected] byExtendingSelection:NO];
     }
     for (NSDictionary* device in s_Devices) {
-        NSString* at = device[@"address"];
-        if (at.length == 0) {
-            continue;
+        // Every address it is known by, asked at once: the saved one, where its
+        // stream last went (its "before connecting" command may choose another,
+        // as when a direct link is down), and the name Moonlight knows it by.
+        // It answers if any of them does; the first to answer is the one shown.
+        NSString* deviceName = device[@"name"] ?: @"";
+        NSMutableOrderedSet<NSString*>* addresses = [NSMutableOrderedSet orderedSet];
+        for (NSString* each in @[reached[deviceName] ?: @"", device[@"address"] ?: @"", device[@"host"] ?: @""]) {
+            if (each.length > 0) {
+                [addresses addObject:each];
+            }
         }
-        NSURL* url = [NSURL URLWithString:[NSString stringWithFormat:@"http://%@:47989/serverinfo", at]];
-        if (url == nil) {
-            continue;
+        __block NSUInteger pending = addresses.count;
+        __block bool answered = false;
+        for (NSString* at in addresses) {
+            NSURL* url = [NSURL URLWithString:[NSString stringWithFormat:@"http://%@:47989/serverinfo", at]];
+            NSMutableURLRequest* request = url != nil ? [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:2.5] : nil;
+            NSDate* sent = [NSDate date];
+            void (^heard)(NSString*) = ^(NSString* body) {
+                bool online = [body containsString:@"<hostname>"];
+                bool busy = online && ![body containsString:@"SERVER_FREE"];
+                int ms = (int)round(-sent.timeIntervalSinceNow * 1000);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    pending--;
+                    // Only the first answer, or that none came once all have failed.
+                    if (answered || (!online && pending > 0)) {
+                        return;
+                    }
+                    answered = online;
+                    DeviceStatus* status = statuses[deviceName];
+                    if (status == nil) {
+                        status = [[[DeviceStatus alloc] init] autorelease];
+                        statuses[deviceName] = status;
+                    }
+                    bool changed = !status->asked || status->online != online || status->busy != busy;
+                    status->asked = true;
+                    status->online = online;
+                    status->busy = busy;
+                    status->ms = ms;
+                    [status->at release];
+                    status->at = online ? [at copy] : nil;
+                    if (changed) {
+                        NSInteger selected = table.selectedRow;
+                        [table reloadData];
+                        [table selectRowIndexes:[NSIndexSet indexSetWithIndex:selected] byExtendingSelection:NO];
+                    }
+                    [self show];
+                });
+            };
+            if (request == nil) {
+                heard(nil);
+                continue;
+            }
+            [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
+                heard(data != nil ? [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease] : nil);
+            }] resume];
         }
-        NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:2.5];
-        NSDate* sent = [NSDate date];
-        [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
-            NSString* body = data != nil ? [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease] : nil;
-            bool online = [body containsString:@"<hostname>"];
-            bool busy = online && ![body containsString:@"SERVER_FREE"];
-            int ms = (int)round(-sent.timeIntervalSinceNow * 1000);
-            dispatch_async(dispatch_get_main_queue(), ^{
-                DeviceStatus* status = statuses[at];
-                if (status == nil) {
-                    status = [[[DeviceStatus alloc] init] autorelease];
-                    statuses[at] = status;
-                }
-                bool changed = !status->asked || status->online != online || status->busy != busy;
-                status->asked = true;
-                status->online = online;
-                status->busy = busy;
-                status->ms = ms;
-                if (changed) {
-                    NSInteger selected = table.selectedRow;
-                    [table reloadData];
-                    [table selectRowIndexes:[NSIndexSet indexSetWithIndex:selected] byExtendingSelection:NO];
-                }
-                [self show];
-            });
-        }] resume];
     }
 }
 
@@ -628,6 +653,9 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
     NSString* typed = [address.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
     while ([typed hasPrefix:@"-"]) {
         typed = [typed substringFromIndex:1];
+    }
+    if (![typed isEqualToString:device[@"address"] ?: @""]) {
+        [reached removeObjectForKey:device[@"name"] ?: @""]; // a new address is asked at, not where the last stream went
     }
     device[@"address"] = typed;
     device[@"system"] = system.indexOfSelectedItem == 1 ? @"linux" : @"mac";
@@ -1057,6 +1085,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
             [self show];
             return;
         }
+        reached[deviceName] = at;
         // Moonlight tries the address it last saw the host at before the one it
         // is given; make them the same (see remote-mbp.sh for how that went wrong).
         NSString* prefix = device[@"host"] != nil ? moonlightHostPrefix(device[@"host"]) : nil;
@@ -1280,6 +1309,7 @@ static void runShell(NSString* command, NSTimeInterval limit, void (^done)(NSDat
 - (void)build
 {
     statuses = [[NSMutableDictionary alloc] init];
+    reached = [[NSMutableDictionary alloc] init];
     pictures = [[NSMutableDictionary alloc] init];
     pictureTimes = [[NSMutableDictionary alloc] init];
     running = [[NSMutableSet alloc] init];

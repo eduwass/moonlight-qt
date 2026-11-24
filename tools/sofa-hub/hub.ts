@@ -175,7 +175,7 @@ const macPad = new MacTrackpad((m) => {
   if (m.t !== "move") return mac.send(m);
   const seq = ++cursorSeq;
   mac.send({ ...m, seq });
-  if (settings.instantCursor && app.connected) app.send({ t: "cursor", dx: m.dx, dy: m.dy, seq });
+  if (settings.instantCursor && app.screen === "stream") app.send({ t: "cursor", dx: m.dx, dy: m.dy, seq });
 }, padOptions());
 
 /** Tells the receiver whether the Apple TV draws the cursor itself (from the next stream). */
@@ -421,7 +421,7 @@ function onMacLine(line: string): void {
     app.send({ t: "restart", host, ok: word === "restarting", ...(word === "restart-failed" ? { error: rest || "failed" } : {}) });
   } else if (word === "cursor") {
     const [seq, x, y, w, h] = rest.split(" ").map(Number);
-    if (settings.instantCursor && app.connected && [seq, x, y, w, h].every(Number.isFinite)) app.send({ t: "cursorAt", seq, x, y, w, h });
+    if (settings.instantCursor && app.screen === "stream" && [seq, x, y, w, h].every(Number.isFinite)) app.send({ t: "cursorAt", seq, x, y, w, h });
   } else if (word === "speed-done" || word === "speed-failed") {
     app.send({ t: "speed", host: macName(), ok: word === "speed-done", ...(word === "speed-done" ? { bytes: Number(rest) || 0 } : { error: rest || "failed" }) });
   } else if (word === "pong") {
