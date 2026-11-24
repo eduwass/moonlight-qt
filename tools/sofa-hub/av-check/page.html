@@ -1,0 +1,15 @@
+<!doctype html><meta charset=utf-8><title>A/V sync</title>
+<style>html,body{margin:0;height:100%;background:#000}#f{position:fixed;inset:0;background:#fff;opacity:0}#t{position:fixed;bottom:20px;left:20px;color:#666;font:20px system-ui}</style>
+<div id=f></div><div id=t>A/V sync test · a white flash and a beep together, every second</div>
+<script>
+// Every second: the screen goes white for 2 frames and a 1 kHz beep plays for 50 ms, scheduled to the same instant.
+const ctx = new AudioContext(), f = document.getElementById('f');
+function tick() {
+  const when = ctx.currentTime + 0.1, o = ctx.createOscillator(), g = ctx.createGain();
+  o.frequency.value = 1000; g.gain.value = 0.5; o.connect(g); g.connect(ctx.destination); o.start(when); o.stop(when + 0.05);
+  const delayMs = (when - ctx.currentTime) * 1000 - (ctx.outputLatency || ctx.baseLatency || 0) * 1000;
+  setTimeout(() => { f.style.opacity = 1; requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => (f.style.opacity = 0)))); }, Math.max(0, delayMs));
+}
+document.addEventListener('click', () => ctx.resume());
+setInterval(tick, 1000);
+</script>

@@ -136,3 +136,39 @@ size threshold to 600 for this trackpad.
 ```sh
 bun check.ts
 ```
+
+## Sound check: crackles and lip sync
+
+`av-check/` measures what the TV actually plays, with a laptop's camera and mic pointed at the TV. Use it when a
+computer's stream crackles or its sound runs ahead of or behind the picture. The laptop must run Helium (or Chrome)
+with CDP: mbpmax's Helium is `localhost:9223` on devbox via `devbox tunnel`. Its browser needs camera and mic
+permission once.
+
+**Crackles.** Start the Sofa app's test tone (Settings → Check connection → Sound, or the AppLink `tone` message)
+while streaming, then record and take the tone apart:
+
+```sh
+cd av-check
+bun record.ts 10 tone.webm   # 10 s of camera + mic from the laptop (http://localhost:9223)
+bun tone.ts tone.webm        # clean: dips5ms 0, notTonePct.median under ~1
+```
+
+Any `dips5ms` are dropouts; a high `notTonePct` with a clean `dips5ms` is noise in the room, not the stream.
+
+**Lip sync.** Open `page.html` (a white flash and a 1 kHz beep every second, scheduled together) in the streamed
+computer's browser, record, close it, and pair flashes with beeps:
+
+```sh
+bun open-page.ts http://localhost:9222 open   # mbp13's Helium; for omarchypc first: ssh -N -L 9232:localhost:9222 omarchypc
+bun record.ts 15 sync.webm
+bun open-page.ts http://localhost:9222 close
+bun sync.ts sync.webm [w:h:x:y]               # crop = the TV's screen in the 640x360 frame (default 300:130:250:100)
+```
+
+`soundLateMs` is how far the sound trails the picture. Ignore the first few pairs, while the stream settles. Under
+~60 ms nobody notices; above ~100 ms speech looks dubbed. Check the crop on one frame first
+(`ffmpeg -ss 5 -i sync.webm -frames:v 1 frame.jpg`); a crop off the TV finds no flashes.
+
+Results on 2026-11-24, after the Sofa app's own audio output replaced SDL's (Limelight/Stream/Connection.m,
+30 ms cushion): both computers 0 dips; sound late ~45 ms on mbp13 and ~85 ms on omarchypc once settled. The Apple
+TV's HDMI output adds about 80 ms of its own that it compensates for.
