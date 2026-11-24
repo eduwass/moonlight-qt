@@ -117,8 +117,21 @@ export function sofaDevices(batteries: Record<string, number>, present: { keyboa
   ];
 }
 
-/** {model_name: capacity} for every Bluetooth HID battery. */
-export function hidBatteries(dir = "/sys/class/power_supply"): Record<string, number> {
+// Reading capacity asks the device itself over Bluetooth, and the Magic Trackpad drops its connection
+// when asked every 10 s (it reconnected every ~30 s until this cache; a single read is harmless).
+// Batteries change slowly: read at most every BATTERY_EVERY_MS and answer from the cache in between.
+const BATTERY_EVERY_MS = 10 * 60_000;
+let batteryCache: { at: number; values: Record<string, number> } | null = null;
+
+/** {model_name: capacity} for every Bluetooth HID battery, read at most every 10 minutes. */
+export function hidBatteries(dir = "/sys/class/power_supply", now = Date.now()): Record<string, number> {
+  if (batteryCache && now - batteryCache.at < BATTERY_EVERY_MS && dir === "/sys/class/power_supply") return batteryCache.values;
+  const values = readBatteries(dir);
+  if (dir === "/sys/class/power_supply") batteryCache = { at: now, values };
+  return values;
+}
+
+function readBatteries(dir: string): Record<string, number> {
   const out: Record<string, number> = {};
   let names: string[] = [];
   try {
